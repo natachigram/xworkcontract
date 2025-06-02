@@ -1,0 +1,61 @@
+# Rust build artifacts and cache
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (uncomment if this is a library package)
+# Cargo.lock
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS generated files
+Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Development backup files
+src/*.bak
+*.bak
+
+# Temporary development files
+current contract
+
+# Development documentation and notes
+COMPILATION_FIXES.md
+WARNING_FIXES.md
+FINAL_COMPLETION_SUMMARY.md
+IMPLEMENTATION_COMPLETION.md
+QUALITY_COMPLETION.md
+
+# Outdated or broken test files
+tests/integration.rs
+tests/integration_broken.rs
+tests/integration_fixed.rs
+
+# Log files
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Coverage reports
+coverage/
+*.profraw
+
+# Benchmark results
+criterion/
+
+# Temporary files
+tmp/
+temp/
