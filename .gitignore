@@ -3,8 +3,8 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo lock file (uncomment if this is a library package)
-# Cargo.lock
+# Keep Cargo.lock for reproducible builds in blockchain deployment
+# Cargo.lock should be committed for binaries/applications
 
 # IDE and editor files
 .vscode/
@@ -36,6 +36,14 @@ FINAL_COMPLETION_SUMMARY.md
 IMPLEMENTATION_COMPLETION.md
 QUALITY_COMPLETION.md
 
+# Markdown files (documentation, notes, etc.)
+*.md
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!LICENSE.md
+!SECURITY.md
+
 # Outdated or broken test files
 tests/integration.rs
 tests/integration_broken.rs
@@ -59,3 +67,30 @@ criterion/
 # Temporary files
 tmp/
 temp/
+
+# =====================================
+# BLOCKCHAIN DEPLOYMENT ESSENTIAL FILES
+# =====================================
+# DO NOT IGNORE THESE FILES - THEY ARE REQUIRED FOR DEPLOYMENT
+
+# Keep these deployment files
+# !Cargo.toml
+# !Cargo.lock
+# !src/
+# !examples/
+# !schema/
+# !scripts/
+# !artifacts/
+# !*.wasm
+# !*.json
+# !*.sh
+# !*.toml
+
+# Critical deployment files that must be committed
+!deploy_xion.sh
+!setup_deployment.sh
+!scripts/deploy.sh
+!artifacts/checksums.txt
+!artifacts/xworks_freelance_contract.wasm
+!schema/*.json
+!examples/schema.rs

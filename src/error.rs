@@ -34,6 +34,9 @@ pub enum ContractError {
     #[error("Insufficient funds: expected {expected}, got {actual}")]
     InsufficientFunds { expected: String, actual: String },
 
+    #[error("Invalid funds provided")]
+    InvalidFunds {},
+
     #[error("Job status error: {msg}")]
     JobStatusError { msg: String },
 

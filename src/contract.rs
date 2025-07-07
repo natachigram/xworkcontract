@@ -8,6 +8,7 @@ use crate::helpers::{
     validate_budget, validate_deadline, validate_duration, validate_job_description,
     validate_job_title,
 };
+use crate::job_management::{execute_edit_job, execute_edit_proposal, execute_submit_proposal};
 use crate::msg::{
     BountiesResponse, BountyResponse, BountySubmissionResponse, BountySubmissionsResponse,
     ConfigResponse, DisputeResponse, DisputesResponse, EscrowResponse, ExecuteMsg, InstantiateMsg,
@@ -20,12 +21,13 @@ use crate::security::{
     RateLimitAction,
 };
 use crate::state::{
-    Bounty, BountyStatus, BountySubmission, Config, Job, JobStatus, Milestone, Proposal, Rating,
-    RewardTier, SubmissionStatus, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_COUNTER, BOUNTY_SUBMISSIONS,
+    Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config, Job, JobStatus,
+    Milestone, Rating, RewardTier, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_COUNTER, BOUNTY_SUBMISSIONS,
     BOUNTY_SUBMISSIONS_BY_BOUNTY, BOUNTY_SUBMISSION_COUNTER, CONFIG, DISPUTES, ESCROWS, JOBS,
     JOB_COUNTER, JOB_PROPOSALS, PROPOSALS, PROPOSAL_COUNTER, RATE_LIMITS, RATINGS,
     USER_BOUNTY_SUBMISSIONS, USER_PROPOSALS, USER_STATS,
 };
+use crate::user_management::execute_update_user_profile;
 
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response,
@@ -69,6 +71,16 @@ pub fn instantiate(
     CONFIG.save(deps.storage, &config)?;
     JOB_COUNTER.save(deps.storage, &0)?;
     PROPOSAL_COUNTER.save(deps.storage, &0)?;
+
+    // Initialize all the NEXT_* counters used by other modules
+    use crate::state::{
+        NEXT_BOUNTY_ID, NEXT_BOUNTY_SUBMISSION_ID, NEXT_ESCROW_ID, NEXT_JOB_ID, NEXT_PROPOSAL_ID,
+    };
+    NEXT_JOB_ID.save(deps.storage, &0)?;
+    NEXT_PROPOSAL_ID.save(deps.storage, &0)?;
+    NEXT_ESCROW_ID.save(deps.storage, &0)?;
+    NEXT_BOUNTY_ID.save(deps.storage, &0)?;
+    NEXT_BOUNTY_SUBMISSION_ID.save(deps.storage, &0)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -135,8 +147,35 @@ pub fn execute(
             milestones,
         ),
 
-        ExecuteMsg::DeleteJob { job_id } => execute_delete_job(deps, env, info, job_id),
-        ExecuteMsg::CancelJob { job_id } => execute_cancel_job(deps, env, info, job_id),
+        ExecuteMsg::UpdateUserProfile {
+            name,
+            bio,
+            skills,
+            location,
+            website,
+            portfolio_url,
+            hourly_rate,
+            availability,
+        } => execute_update_user_profile(
+            deps,
+            env,
+            info,
+            name,
+            bio,
+            skills,
+            location,
+            website,
+            portfolio_url,
+            hourly_rate,
+            availability,
+        ),
+
+        ExecuteMsg::DeleteJob { job_id } => {
+            crate::job_management::execute_delete_job(deps, env, info, job_id)
+        }
+        ExecuteMsg::CancelJob { job_id } => {
+            crate::job_management::execute_cancel_job(deps, env, info, job_id)
+        }
 
         // Proposal Management
         ExecuteMsg::SubmitProposal {
@@ -482,6 +521,8 @@ fn execute_post_job(
         milestones: job_milestones,
         escrow_id: None,
         total_proposals: 0,
+        company: None,
+        location: None,
     };
 
     JOBS.save(deps.storage, job_id, &job)?;
@@ -502,534 +543,6 @@ fn execute_post_job(
         .add_attribute("poster", info.sender.to_string())
         .add_attribute("budget", budget.to_string())
         .add_attribute("milestones_count", job.milestones.len().to_string()))
-}
-
-// Additional execute functions continue...
-#[allow(clippy::too_many_arguments)]
-fn execute_submit_proposal(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    bid_amount: Uint128,
-    cover_letter: String,
-    delivery_time_days: u64,
-    milestones: Option<Vec<crate::state::ProposalMilestone>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    check_rate_limit(
-        deps.branch(),
-        &env,
-        &info.sender,
-        RateLimitAction::SubmitProposal,
-    )?;
-
-    ensure_not_paused(deps.as_ref())?;
-
-    // Input validation and sanitization
-    // For proposals, only validate cover letter - not title/description
-    if cover_letter.is_empty() || cover_letter.len() > 2000 {
-        return Err(ContractError::InvalidInput {
-            error: "Cover letter must be between 1-2000 characters".to_string(),
-        });
-    }
-    validate_budget(bid_amount)?;
-
-    if delivery_time_days == 0 || delivery_time_days > 365 {
-        return Err(ContractError::InvalidInput {
-            error: "Delivery time must be between 1-365 days".to_string(),
-        });
-    }
-
-    // Load and validate job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    if job.status != JobStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Job is not open for proposals".to_string(),
-        });
-    }
-
-    // Check if job is expired
-    if env.block.time > job.deadline {
-        return Err(ContractError::JobExpired {});
-    }
-
-    // Check if user already submitted a proposal for this job
-    let user_proposals = USER_PROPOSALS
-        .may_load(deps.storage, &info.sender)?
-        .unwrap_or_default();
-
-    for proposal_id in &user_proposals {
-        if let Ok(existing_proposal) = PROPOSALS.load(deps.storage, *proposal_id) {
-            if existing_proposal.job_id == job_id {
-                return Err(ContractError::InvalidInput {
-                    error: "You have already submitted a proposal for this job".to_string(),
-                });
-            }
-        }
-    }
-
-    // Process milestones if provided
-    let proposal_milestones = milestones.unwrap_or_default();
-    if !proposal_milestones.is_empty() {
-        let total_milestone_amount: Uint128 = proposal_milestones
-            .iter()
-            .try_fold(Uint128::zero(), |acc, m| acc.checked_add(m.amount))?;
-
-        if total_milestone_amount != bid_amount {
-            return Err(ContractError::InvalidInput {
-                error: "Sum of proposal milestone amounts must equal bid amount".to_string(),
-            });
-        }
-    }
-
-    // Get and increment proposal counter
-    let proposal_id = PROPOSAL_COUNTER.load(deps.storage)?;
-    PROPOSAL_COUNTER.save(deps.storage, &(proposal_id + 1))?;
-
-    // Create and save proposal
-    let proposal = Proposal {
-        id: proposal_id,
-        freelancer: info.sender.clone(),
-        job_id,
-        bid_amount,
-        cover_letter,
-        delivery_time_days,
-        submitted_at: env.block.time,
-        milestones: proposal_milestones,
-    };
-
-    PROPOSALS.save(deps.storage, proposal_id, &proposal)?;
-
-    // Update job proposals list
-    let mut job_proposals = JOB_PROPOSALS.load(deps.storage, job_id)?;
-    job_proposals.push(proposal_id);
-    JOB_PROPOSALS.save(deps.storage, job_id, &job_proposals)?;
-
-    // Update user proposals list
-    let mut user_proposals = USER_PROPOSALS
-        .may_load(deps.storage, &info.sender)?
-        .unwrap_or_default();
-    user_proposals.push(proposal_id);
-    USER_PROPOSALS.save(deps.storage, &info.sender, &user_proposals)?;
-
-    // Update job proposal count
-    job.total_proposals += 1;
-    job.updated_at = env.block.time;
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "submit_proposal")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("proposal_id", proposal_id.to_string())
-        .add_attribute("freelancer", info.sender.to_string())
-        .add_attribute("bid_amount", bid_amount.to_string()))
-}
-
-// Placeholder implementations for other execute functions
-#[allow(clippy::too_many_arguments)]
-fn execute_edit_job(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    title: Option<String>,
-    description: Option<String>,
-    budget: Option<Uint128>,
-    category: Option<String>,
-    skills_required: Option<Vec<String>>,
-    duration_days: Option<u64>,
-    documents: Option<Vec<String>>,
-    milestones: Option<Vec<MilestoneInput>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-    check_rate_limit(deps.branch(), &env, &info.sender, RateLimitAction::PostJob)?;
-
-    // Load and validate job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    // Only the client who posted the job can edit it
-    if job.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only edit jobs that are open and don't have accepted proposals
-    if job.status != JobStatus::Open {
-        return Err(ContractError::JobStatusError {
-            msg: "Can only edit open jobs".to_string(),
-        });
-    }
-
-    // Check if there are any accepted proposals
-    let proposal_count = PROPOSALS
-        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
-        .filter(|item| {
-            if let Ok((_, proposal)) = item {
-                proposal.job_id == job_id
-            } else {
-                false
-            }
-        })
-        .count();
-
-    if proposal_count > 0 {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot edit job with existing proposals".to_string(),
-        });
-    }
-
-    // Validate and update fields
-    if let Some(new_title) = title {
-        validate_job_title(&new_title)?;
-        job.title = new_title;
-    }
-
-    if let Some(new_description) = description {
-        validate_job_description(&new_description)?;
-        job.description = new_description;
-    }
-
-    if let Some(new_category) = category {
-        if new_category.is_empty() || new_category.len() > 50 {
-            return Err(ContractError::InvalidInput {
-                error: "Category must be 1-50 characters".to_string(),
-            });
-        }
-        job.category = new_category;
-    }
-
-    if let Some(new_skills) = skills_required {
-        if new_skills.is_empty() || new_skills.len() > 20 {
-            return Err(ContractError::InvalidInput {
-                error: "Must specify 1-20 skills".to_string(),
-            });
-        }
-        for skill in &new_skills {
-            if skill.is_empty() || skill.len() > 50 {
-                return Err(ContractError::InvalidInput {
-                    error: "Each skill must be 1-50 characters".to_string(),
-                });
-            }
-        }
-        job.skills_required = new_skills;
-    }
-
-    if let Some(new_budget) = budget {
-        validate_budget(new_budget)?;
-        job.budget = new_budget;
-    }
-
-    if let Some(new_duration) = duration_days {
-        let config = CONFIG.load(deps.storage)?;
-        validate_duration(new_duration, config.max_job_duration_days)?;
-        job.duration_days = new_duration;
-        job.deadline = get_future_timestamp(env.block.time, new_duration);
-    }
-
-    if let Some(new_documents) = documents {
-        if new_documents.len() > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Maximum 10 documents allowed".to_string(),
-            });
-        }
-        for doc in &new_documents {
-            if doc.is_empty() || doc.len() > 500 {
-                return Err(ContractError::InvalidInput {
-                    error: "Each document URL must be 1-500 characters".to_string(),
-                });
-            }
-        }
-        job.documents = new_documents;
-    }
-
-    if let Some(new_milestones) = milestones {
-        if new_milestones.len() > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Maximum 10 milestones allowed".to_string(),
-            });
-        }
-
-        let mut total_milestone_amount = Uint128::zero();
-        let mut processed_milestones = Vec::new();
-
-        for (index, milestone) in new_milestones.iter().enumerate() {
-            if milestone.title.is_empty() || milestone.title.len() > 100 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone title must be 1-100 characters".to_string(),
-                });
-            }
-            if milestone.description.len() > 500 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone description must be max 500 characters".to_string(),
-                });
-            }
-            if milestone.amount.is_zero() {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone amount must be greater than zero".to_string(),
-                });
-            }
-
-            total_milestone_amount = total_milestone_amount.checked_add(milestone.amount)?;
-
-            let milestone_deadline = get_future_timestamp(env.block.time, milestone.deadline_days);
-            validate_deadline(milestone_deadline, env.block.time)?;
-
-            processed_milestones.push(Milestone {
-                id: index as u64,
-                title: milestone.title.clone(),
-                description: milestone.description.clone(),
-                amount: milestone.amount,
-                deadline: milestone_deadline,
-                completed: false,
-                completed_at: None,
-            });
-        }
-
-        // Ensure milestone amounts match job budget
-        if total_milestone_amount != job.budget {
-            return Err(ContractError::InvalidInput {
-                error: "Sum of milestone amounts must equal job budget".to_string(),
-            });
-        }
-
-        job.milestones = processed_milestones;
-    }
-
-    job.updated_at = env.block.time;
-
-    // Save updated job
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "edit_job")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("poster", info.sender))
-}
-
-fn execute_delete_job(
-    mut deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    job_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-
-    // Load and validate job
-    let job = JOBS
-        .load(deps.storage, job_id)
-        .map_err(|_| ContractError::JobNotFound {})?;
-
-    // Only the client who posted the job can delete it
-    if job.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only delete jobs that are open and don't have any proposals
-    if job.status != JobStatus::Open {
-        return Err(ContractError::JobStatusError {
-            msg: "Can only delete open jobs".to_string(),
-        });
-    }
-
-    // Check if there are any proposals for this job
-    let job_proposals = JOB_PROPOSALS
-        .may_load(deps.storage, job_id)?
-        .unwrap_or_default();
-    if !job_proposals.is_empty() {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot delete job with existing proposals".to_string(),
-        });
-    }
-
-    // Check if there's an active escrow
-    if job.escrow_id.is_some() {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot delete job with active escrow".to_string(),
-        });
-    }
-
-    // Remove job from storage
-    JOBS.remove(deps.storage, job_id);
-
-    // Remove job proposals list (should be empty, but cleanup)
-    JOB_PROPOSALS.remove(deps.storage, job_id);
-
-    // Update user stats
-    let mut user_stats = USER_STATS
-        .may_load(deps.storage, &job.poster)?
-        .unwrap_or_default();
-    user_stats.total_jobs_posted = user_stats.total_jobs_posted.saturating_sub(1);
-    USER_STATS.save(deps.storage, &job.poster, &user_stats)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "delete_job")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("poster", info.sender)
-        .add_attribute("budget_freed", job.budget.to_string()))
-}
-
-fn execute_cancel_job(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-
-    // Load and validate job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    if job.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    if job.status != JobStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Only open jobs can be cancelled".to_string(),
-        });
-    }
-
-    // Update job status
-    job.status = JobStatus::Cancelled;
-    job.updated_at = env.block.time;
-
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    // If there's an escrow, it should be refunded (this would need escrow integration)
-    let mut response = Response::new()
-        .add_attribute("method", "cancel_job")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("poster", info.sender.to_string());
-
-    // If escrow exists, initiate refund
-    if let Some(escrow_id) = &job.escrow_id {
-        // Note: In a real implementation, you'd call the escrow refund function here
-        response = response.add_attribute("escrow_refund_initiated", escrow_id);
-    }
-
-    Ok(response)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_edit_proposal(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    proposal_id: u64,
-    bid_amount: Option<Uint128>,
-    cover_letter: Option<String>,
-    delivery_time_days: Option<u64>,
-    milestones: Option<Vec<crate::state::ProposalMilestone>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-    check_rate_limit(
-        deps.branch(),
-        &env,
-        &info.sender,
-        RateLimitAction::SubmitProposal,
-    )?;
-
-    // Load and validate proposal
-    let mut proposal = PROPOSALS.load(deps.storage, proposal_id)?;
-
-    // Only the freelancer who submitted the proposal can edit it
-    if proposal.freelancer != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Load the associated job to ensure it's still open
-    let job = JOBS.load(deps.storage, proposal.job_id)?;
-    if job.status != JobStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot edit proposal for non-open job".to_string(),
-        });
-    }
-
-    // Check if job is expired
-    if env.block.time > job.deadline {
-        return Err(ContractError::JobExpired {});
-    }
-
-    // Validate and update fields
-    if let Some(new_bid_amount) = bid_amount {
-        validate_budget(new_bid_amount)?;
-        proposal.bid_amount = new_bid_amount;
-    }
-
-    if let Some(new_cover_letter) = cover_letter {
-        if new_cover_letter.is_empty() || new_cover_letter.len() > 2000 {
-            return Err(ContractError::InvalidInput {
-                error: "Cover letter must be 1-2000 characters".to_string(),
-            });
-        }
-        proposal.cover_letter = new_cover_letter;
-    }
-
-    if let Some(new_delivery_time) = delivery_time_days {
-        if new_delivery_time == 0 || new_delivery_time > 365 {
-            return Err(ContractError::InvalidInput {
-                error: "Delivery time must be between 1-365 days".to_string(),
-            });
-        }
-        proposal.delivery_time_days = new_delivery_time;
-    }
-
-    if let Some(new_milestones) = milestones {
-        if new_milestones.len() > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Maximum 10 milestones allowed".to_string(),
-            });
-        }
-
-        let mut total_milestone_amount = Uint128::zero();
-        for milestone in &new_milestones {
-            if milestone.title.is_empty() || milestone.title.len() > 100 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone title must be 1-100 characters".to_string(),
-                });
-            }
-            if milestone.description.len() > 500 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone description must be max 500 characters".to_string(),
-                });
-            }
-            if milestone.amount.is_zero() {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone amount must be greater than zero".to_string(),
-                });
-            }
-            total_milestone_amount = total_milestone_amount.checked_add(milestone.amount)?;
-        }
-
-        // Ensure milestone amounts sum to proposal bid amount
-        if total_milestone_amount != proposal.bid_amount {
-            return Err(ContractError::InvalidInput {
-                error: "Sum of milestone amounts must equal bid amount".to_string(),
-            });
-        }
-
-        proposal.milestones = new_milestones;
-    }
-
-    // Save updated proposal
-    PROPOSALS.save(deps.storage, proposal_id, &proposal)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "edit_proposal")
-        .add_attribute("proposal_id", proposal_id.to_string())
-        .add_attribute("job_id", proposal.job_id.to_string())
-        .add_attribute("freelancer", info.sender)
-        .add_attribute("bid_amount", proposal.bid_amount.to_string()))
 }
 
 fn execute_withdraw_proposal(
@@ -1830,33 +1343,25 @@ fn query_platform_stats(deps: Deps) -> StdResult<PlatformStatsResponse> {
     let mut completed_jobs = 0u64;
     let mut total_volume = Uint128::zero();
 
-    // Count jobs and calculate stats
-    let jobs_result: StdResult<Vec<_>> = JOBS
+    // Efficiently process jobs using iterator without collecting all into memory
+    for (_, job) in JOBS
         .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
-        .collect();
+        .flatten()
+    {
+        total_jobs += 1;
+        total_volume = total_volume.checked_add(job.budget)?;
 
-    if let Ok(job_pairs) = jobs_result {
-        for (_, job) in job_pairs {
-            total_jobs += 1;
-            total_volume = total_volume.checked_add(job.budget)?;
-
-            match job.status {
-                JobStatus::Open | JobStatus::InProgress => active_jobs += 1,
-                JobStatus::Completed => completed_jobs += 1,
-                _ => {}
-            }
+        match job.status {
+            JobStatus::Open | JobStatus::InProgress => active_jobs += 1,
+            JobStatus::Completed => completed_jobs += 1,
+            _ => {}
         }
     }
 
-    // Count unique users from user stats
-    let users_result: StdResult<Vec<_>> = USER_STATS
+    // Count unique users efficiently
+    let total_users = USER_STATS
         .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
-        .collect();
-
-    let total_users = match users_result {
-        Ok(user_pairs) => user_pairs.len() as u64,
-        Err(_) => 0u64,
-    };
+        .count() as u64;
 
     // Calculate platform fees (approximate based on volume and fee percentage)
     let config = CONFIG.load(deps.storage)?;
@@ -2088,23 +1593,26 @@ fn query_rate_limit_status(
 ) -> StdResult<crate::msg::RateLimitStatusResponse> {
     let addr = deps.api.addr_validate(&address)?;
 
-    // Check rate limits for the main action (job posting)
-    let rate_limit_state = RATE_LIMITS.may_load(deps.storage, (&addr, "post_job"))?;
+    // Get rate limit state from the enhanced security system
+    let current_time = cosmwasm_std::Timestamp::from_seconds(0); // Use a default timestamp
+    let rate_limit = crate::security::USER_RATE_LIMITS
+        .may_load(deps.storage, &addr)?
+        .unwrap_or(crate::security::RateLimit {
+            daily_jobs: 0,
+            daily_proposals: 0,
+            daily_bounties: 0,
+            daily_disputes: 0,
+            daily_escrows: 0,
+            daily_admin_actions: 0,
+            last_reset: current_time,
+        });
 
-    match rate_limit_state {
-        Some(state) => Ok(crate::msg::RateLimitStatusResponse {
-            current_count: state.count,
-            limit: 5, // Default job posting limit
-            window_start: state.window_start,
-            is_limited: state.count >= 5,
-        }),
-        None => Ok(crate::msg::RateLimitStatusResponse {
-            current_count: 0,
-            limit: 5,
-            window_start: cosmwasm_std::Timestamp::from_seconds(0),
-            is_limited: false,
-        }),
-    }
+    Ok(crate::msg::RateLimitStatusResponse {
+        current_count: rate_limit.daily_jobs, // Use jobs as primary metric
+        limit: 5,                             // MAX_JOBS_PER_USER_PER_DAY
+        window_start: rate_limit.last_reset,
+        is_limited: rate_limit.daily_jobs >= 5,
+    })
 }
 
 // ========================================
@@ -2129,21 +1637,9 @@ fn execute_create_bounty(
     documents: Option<Vec<String>>,
 ) -> Result<Response, ContractError> {
     // Security checks
-    ensure_not_paused(deps.as_ref())?;
     reentrancy_guard(deps.branch())?;
-    check_rate_limit(deps.branch(), &env, &info.sender, RateLimitAction::PostJob)?; // Use same rate limit as job posting
-
-    // Input validation
-    validate_text_inputs(&title, &description, None, None)?;
-    validate_job_title(&title)?;
-    validate_job_description(&description)?;
-    validate_budget(total_reward)?;
-
-    if category.is_empty() || category.len() > 50 {
-        return Err(ContractError::InvalidInput {
-            error: "Category must be 1-50 characters".to_string(),
-        });
-    }
+    check_rate_limit(deps.branch(), &env, &info.sender, RateLimitAction::PostJob)?;
+    ensure_not_paused(deps.as_ref())?;
 
     if skills_required.is_empty() || skills_required.len() > 20 {
         return Err(ContractError::InvalidInput {
@@ -2257,6 +1753,7 @@ fn execute_create_bounty(
         .add_attribute("max_winners", max_winners.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_edit_bounty(
     mut deps: DepsMut,
     env: Env,
@@ -2289,13 +1786,13 @@ fn execute_edit_bounty(
     }
 
     // Check if bounty has submissions - if so, limit what can be edited
-    if bounty.total_submissions > 0 {
-        if title.is_some() || requirements.is_some() || submission_deadline_days.is_some() {
-            return Err(ContractError::InvalidInput {
-                error: "Cannot change title, requirements, or deadline when submissions exist"
-                    .to_string(),
-            });
-        }
+    if bounty.total_submissions > 0
+        && (title.is_some() || requirements.is_some() || submission_deadline_days.is_some())
+    {
+        return Err(ContractError::InvalidInput {
+            error: "Cannot change title, requirements, or deadline when submissions exist"
+                .to_string(),
+        });
     }
 
     // Update fields if provided
@@ -2451,7 +1948,9 @@ fn execute_submit_to_bounty(
 
     for submission_id in user_submissions.iter() {
         let submission = BOUNTY_SUBMISSIONS.load(deps.storage, *submission_id)?;
-        if submission.bounty_id == bounty_id && submission.status != SubmissionStatus::Rejected {
+        if submission.bounty_id == bounty_id
+            && submission.status != BountySubmissionStatus::Rejected
+        {
             return Err(ContractError::InvalidInput {
                 error: "You have already submitted to this bounty".to_string(),
             });
@@ -2471,7 +1970,7 @@ fn execute_submit_to_bounty(
         description: description.clone(),
         deliverables,
         submitted_at: env.block.time,
-        status: SubmissionStatus::Submitted,
+        status: BountySubmissionStatus::Submitted,
         review_notes: None,
         score: None,
         winner_position: None,
@@ -2528,8 +2027,8 @@ fn execute_edit_bounty_submission(
     }
 
     // Can only edit submitted or rejected submissions
-    if submission.status != SubmissionStatus::Submitted
-        && submission.status != SubmissionStatus::Rejected
+    if submission.status != BountySubmissionStatus::Submitted
+        && submission.status != BountySubmissionStatus::Rejected
     {
         return Err(ContractError::InvalidInput {
             error: "Can only edit submitted or rejected submissions".to_string(),
@@ -2573,8 +2072,8 @@ fn execute_edit_bounty_submission(
     }
 
     // Reset status to submitted if it was rejected
-    if submission.status == SubmissionStatus::Rejected {
-        submission.status = SubmissionStatus::Submitted;
+    if submission.status == BountySubmissionStatus::Rejected {
+        submission.status = BountySubmissionStatus::Submitted;
         submission.review_notes = None;
         submission.score = None;
     }
@@ -2607,7 +2106,7 @@ fn execute_withdraw_bounty_submission(
     }
 
     // Can only withdraw submitted submissions
-    if submission.status != SubmissionStatus::Submitted {
+    if submission.status != BountySubmissionStatus::Submitted {
         return Err(ContractError::InvalidInput {
             error: "Can only withdraw submitted submissions".to_string(),
         });
@@ -2646,7 +2145,7 @@ fn execute_review_bounty_submission(
     _env: Env,
     info: MessageInfo,
     submission_id: u64,
-    status: SubmissionStatus,
+    status: BountySubmissionStatus,
     review_notes: Option<String>,
     score: Option<u8>,
 ) -> Result<Response, ContractError> {
@@ -2664,7 +2163,7 @@ fn execute_review_bounty_submission(
     }
 
     // Can only review submitted submissions
-    if submission.status != SubmissionStatus::Submitted {
+    if submission.status != BountySubmissionStatus::Submitted {
         return Err(ContractError::InvalidInput {
             error: "Can only review submitted submissions".to_string(),
         });
@@ -2672,8 +2171,9 @@ fn execute_review_bounty_submission(
 
     // Validate status change
     match status {
-        SubmissionStatus::UnderReview | SubmissionStatus::Approved | SubmissionStatus::Rejected => {
-        }
+        BountySubmissionStatus::UnderReview
+        | BountySubmissionStatus::Approved
+        | BountySubmissionStatus::Rejected => {}
         _ => {
             return Err(ContractError::InvalidInput {
                 error: "Invalid review status".to_string(),
@@ -2784,7 +2284,7 @@ fn execute_select_bounty_winners(
         }
 
         // Check submission is approved
-        if submission.status != SubmissionStatus::Approved {
+        if submission.status != BountySubmissionStatus::Approved {
             return Err(ContractError::InvalidInput {
                 error: "Only approved submissions can be selected as winners".to_string(),
             });
@@ -2801,7 +2301,7 @@ fn execute_select_bounty_winners(
     // Update winning submissions
     for winner in &winner_submissions {
         let mut submission = BOUNTY_SUBMISSIONS.load(deps.storage, winner.submission_id)?;
-        submission.status = SubmissionStatus::Winner;
+        submission.status = BountySubmissionStatus::Winner;
         submission.winner_position = Some(winner.position);
         BOUNTY_SUBMISSIONS.save(deps.storage, winner.submission_id, &submission)?;
     }
@@ -3021,7 +2521,7 @@ fn query_bounties(
 
                 // Filter by poster
                 if let Some(ref post) = poster {
-                    if bounty.poster.to_string() != *post {
+                    if bounty.poster.as_str() != post {
                         return false;
                     }
                 }
@@ -3119,7 +2619,7 @@ fn query_bounty_submission(deps: Deps, submission_id: u64) -> StdResult<BountySu
 fn query_bounty_submissions(
     deps: Deps,
     bounty_id: u64,
-    status: Option<SubmissionStatus>,
+    status: Option<BountySubmissionStatus>,
 ) -> StdResult<BountySubmissionsResponse> {
     let submission_ids = BOUNTY_SUBMISSIONS_BY_BOUNTY
         .may_load(deps.storage, bounty_id)?

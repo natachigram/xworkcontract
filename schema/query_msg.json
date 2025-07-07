@@ -399,6 +399,228 @@
     {
       "type": "object",
       "required": [
+        "GetBounty"
+      ],
+      "properties": {
+        "GetBounty": {
+          "type": "object",
+          "required": [
+            "bounty_id"
+          ],
+          "properties": {
+            "bounty_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetBounties"
+      ],
+      "properties": {
+        "GetBounties": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "poster": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "start_after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BountyStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetAllBounties"
+      ],
+      "properties": {
+        "GetAllBounties": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetUserBounties"
+      ],
+      "properties": {
+        "GetUserBounties": {
+          "type": "object",
+          "required": [
+            "user"
+          ],
+          "properties": {
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BountyStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "user": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetBountySubmission"
+      ],
+      "properties": {
+        "GetBountySubmission": {
+          "type": "object",
+          "required": [
+            "submission_id"
+          ],
+          "properties": {
+            "submission_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetBountySubmissions"
+      ],
+      "properties": {
+        "GetBountySubmissions": {
+          "type": "object",
+          "required": [
+            "bounty_id"
+          ],
+          "properties": {
+            "bounty_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SubmissionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "GetUserBountySubmissions"
+      ],
+      "properties": {
+        "GetUserBountySubmissions": {
+          "type": "object",
+          "required": [
+            "user"
+          ],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "start_after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "user": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
         "GetConfig"
       ],
       "properties": {
@@ -496,6 +718,16 @@
     }
   ],
   "definitions": {
+    "BountyStatus": {
+      "type": "string",
+      "enum": [
+        "Open",
+        "InReview",
+        "Completed",
+        "Cancelled",
+        "Expired"
+      ]
+    },
     "JobStatus": {
       "type": "string",
       "enum": [
@@ -504,6 +736,16 @@
         "Completed",
         "Cancelled",
         "Disputed"
+      ]
+    },
+    "SubmissionStatus": {
+      "type": "string",
+      "enum": [
+        "Submitted",
+        "UnderReview",
+        "Approved",
+        "Rejected",
+        "Winner"
       ]
     }
   }

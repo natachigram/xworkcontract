@@ -1,6 +1,6 @@
 use crate::state::{
-    AuditLog, Bounty, BountyStatus, BountySubmission, Config, Dispute, EscrowState, Job, JobStatus,
-    Proposal, ProposalMilestone, Rating, SecurityMetrics, SubmissionStatus, UserStats,
+    AuditLog, Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config, Dispute,
+    EscrowState, Job, JobStatus, Proposal, ProposalMilestone, Rating, SecurityMetrics, UserStats,
 };
 use cosmwasm_std::{Timestamp, Uint128};
 use schemars::JsonSchema;
@@ -155,6 +155,18 @@ pub enum ExecuteMsg {
     PauseContract {},
     UnpauseContract {},
 
+    // User Profile Management
+    UpdateUserProfile {
+        name: Option<String>,
+        bio: Option<String>,
+        skills: Option<Vec<String>>,
+        location: Option<String>,
+        website: Option<String>,
+        portfolio_url: Option<String>,
+        hourly_rate: Option<Uint128>,
+        availability: Option<String>,
+    },
+
     // Bounty Management
     CreateBounty {
         title: String,
@@ -198,7 +210,7 @@ pub enum ExecuteMsg {
     },
     ReviewBountySubmission {
         submission_id: u64,
-        status: SubmissionStatus,
+        status: BountySubmissionStatus,
         review_notes: Option<String>,
         score: Option<u8>,
     },
@@ -321,7 +333,7 @@ pub enum QueryMsg {
     },
     GetBountySubmissions {
         bounty_id: u64,
-        status: Option<SubmissionStatus>,
+        status: Option<BountySubmissionStatus>,
     },
     GetUserBountySubmissions {
         user: String,
@@ -451,4 +463,14 @@ pub struct BountySubmissionResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct BountySubmissionsResponse {
     pub submissions: Vec<BountySubmission>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct EscrowsResponse {
+    pub escrows: Vec<EscrowState>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UserProfileResponse {
+    pub profile: crate::state::UserProfile,
 }

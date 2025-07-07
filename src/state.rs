@@ -39,6 +39,9 @@ pub struct Job {
     pub milestones: Vec<Milestone>,
     pub escrow_id: Option<String>,
     pub total_proposals: u64,
+    // New fields for UI requirements
+    pub company: Option<String>,  // Company name (optional)
+    pub location: Option<String>, // Job location (optional)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -58,8 +61,12 @@ pub struct Proposal {
     pub freelancer: Addr,
     pub job_id: u64,
     pub bid_amount: Uint128,
-    pub cover_letter: String,
+    pub cover_letter_hash: String, // IPFS hash for cover letter (max 750 chars off-chain)
+    pub resume_hash: String,       // IPFS hash for resume (PDF, max 5MB off-chain)
     pub delivery_time_days: u64,
+    pub contact_preference: String, // Contact preference field
+    pub agreed_to_terms: bool,      // Agreement to budget and time
+    pub agreed_to_escrow: bool,     // Acknowledgment of crypto escrow payment
     pub submitted_at: Timestamp,
     pub milestones: Vec<ProposalMilestone>,
 }
@@ -117,6 +124,8 @@ pub struct UserStats {
     pub average_rating: Decimal,
     pub total_ratings: u64,
     pub completion_rate: Decimal,
+    // New field for UI display
+    pub display_name: Option<String>, // Optional display name for freelancers
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -130,6 +139,60 @@ pub struct Dispute {
     pub created_at: Timestamp,
     pub resolved_at: Option<Timestamp>,
     pub resolution: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub enum ProposalStatus {
+    Submitted,
+    Accepted,
+    Rejected,
+    Withdrawn,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub enum EscrowStatus {
+    Pending,
+    Funded,
+    Released,
+    Refunded,
+    Disputed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub enum BountySubmissionStatus {
+    Submitted,
+    UnderReview,
+    Approved,
+    Rejected,
+    Winner,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
+pub struct UserProfile {
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub skills: Vec<String>,
+    pub portfolio_links: Vec<String>,
+    pub created_at: Option<Timestamp>,
+    pub updated_at: Option<Timestamp>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct Escrow {
+    pub id: String,
+    pub job_id: Option<u64>,
+    pub bounty_id: Option<u64>,
+    pub client: Addr,
+    pub freelancer: Addr,
+    pub amount: Uint128,
+    pub platform_fee: Uint128,
+    pub status: EscrowStatus,
+    pub created_at: Timestamp,
+    pub funded_at: Option<Timestamp>,
+    pub released_at: Option<Timestamp>,
+    pub dispute_status: DisputeStatus,
+    pub dispute_raised_at: Option<Timestamp>,
+    pub dispute_deadline: Option<Timestamp>,
 }
 
 // Security-related structures
@@ -175,15 +238,6 @@ pub enum BountyStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub enum SubmissionStatus {
-    Submitted,
-    UnderReview,
-    Approved,
-    Rejected,
-    Winner,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Bounty {
     pub id: u64,
     pub poster: Addr,
@@ -222,7 +276,7 @@ pub struct BountySubmission {
     pub description: String,
     pub deliverables: Vec<String>, // URLs to work, GitHub repos, documents, etc.
     pub submitted_at: Timestamp,
-    pub status: SubmissionStatus,
+    pub status: BountySubmissionStatus,
     pub review_notes: Option<String>, // Admin/poster notes during review
     pub score: Option<u8>,            // 1-10 score for ranking submissions
     pub winner_position: Option<u64>, // If winner, what position (1st, 2nd, etc.)
@@ -233,22 +287,34 @@ pub const JOBS: Map<u64, Job> = Map::new("jobs");
 pub const PROPOSALS: Map<u64, Proposal> = Map::new("proposals");
 pub const JOB_PROPOSALS: Map<u64, Vec<u64>> = Map::new("job_proposals"); // job_id -> proposal_ids
 pub const USER_PROPOSALS: Map<&Addr, Vec<u64>> = Map::new("user_proposals"); // user -> proposal_ids
+pub const USER_JOB_PROPOSALS: Map<(&Addr, u64), u64> = Map::new("user_job_proposals"); // (user, job_id) -> proposal_id to prevent duplicates
 pub const JOB_COUNTER: Item<u64> = Item::new("job_counter");
 pub const PROPOSAL_COUNTER: Item<u64> = Item::new("proposal_counter");
 pub const ESCROWS: Map<&str, EscrowState> = Map::new("escrows");
+
+// Bounty storage
+pub const BOUNTIES: Map<u64, Bounty> = Map::new("bounties");
+pub const BOUNTY_SUBMISSIONS: Map<u64, BountySubmission> = Map::new("bounty_submissions");
+pub const BOUNTY_SUBMISSIONS_BY_BOUNTY: Map<u64, Vec<u64>> =
+    Map::new("bounty_submissions_by_bounty");
+pub const USER_BOUNTY_SUBMISSIONS: Map<&Addr, Vec<u64>> = Map::new("user_bounty_submissions");
+pub const BOUNTY_COUNTER: Item<u64> = Item::new("bounty_counter");
+pub const BOUNTY_SUBMISSION_COUNTER: Item<u64> = Item::new("bounty_submission_counter");
+
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const RATINGS: Map<&str, Rating> = Map::new("ratings"); // job_id_rater_address
 pub const USER_STATS: Map<&Addr, UserStats> = Map::new("user_stats");
 pub const DISPUTES: Map<&str, Dispute> = Map::new("disputes");
 
-// Bounty-related storage
-pub const BOUNTIES: Map<u64, Bounty> = Map::new("bounties");
-pub const BOUNTY_SUBMISSIONS: Map<u64, BountySubmission> = Map::new("bounty_submissions");
-pub const BOUNTY_SUBMISSION_COUNTER: Item<u64> = Item::new("bounty_submission_counter");
-pub const BOUNTY_COUNTER: Item<u64> = Item::new("bounty_counter");
-pub const BOUNTY_SUBMISSIONS_BY_BOUNTY: Map<u64, Vec<u64>> =
-    Map::new("bounty_submissions_by_bounty"); // bounty_id -> submission_ids
-pub const USER_BOUNTY_SUBMISSIONS: Map<&Addr, Vec<u64>> = Map::new("user_bounty_submissions"); // user -> submission_ids
+// Missing ID counters
+pub const NEXT_JOB_ID: Item<u64> = Item::new("next_job_id");
+pub const NEXT_PROPOSAL_ID: Item<u64> = Item::new("next_proposal_id");
+pub const NEXT_ESCROW_ID: Item<u64> = Item::new("next_escrow_id");
+pub const NEXT_BOUNTY_ID: Item<u64> = Item::new("next_bounty_id");
+pub const NEXT_BOUNTY_SUBMISSION_ID: Item<u64> = Item::new("next_bounty_submission_id");
+
+// User profiles storage
+pub const USER_PROFILES: Map<&Addr, UserProfile> = Map::new("user_profiles");
 
 // Security-related storage
 pub const SECURITY_METRICS: Item<SecurityMetrics> = Item::new("security_metrics");

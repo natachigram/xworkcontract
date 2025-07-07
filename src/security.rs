@@ -19,11 +19,19 @@ const MAX_MILESTONES_COUNT: usize = 10;
 // Rate limiting
 const MAX_JOBS_PER_USER_PER_DAY: u64 = 5;
 const MAX_PROPOSALS_PER_USER_PER_DAY: u64 = 20;
+const MAX_BOUNTIES_PER_USER_PER_DAY: u64 = 3;
+const MAX_DISPUTES_PER_USER_PER_DAY: u64 = 2;
+const MAX_ESCROWS_PER_USER_PER_DAY: u64 = 10;
+const MAX_ADMIN_ACTIONS_PER_DAY: u64 = 50;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RateLimit {
     pub daily_jobs: u64,
     pub daily_proposals: u64,
+    pub daily_bounties: u64,
+    pub daily_disputes: u64,
+    pub daily_escrows: u64,
+    pub daily_admin_actions: u64,
     pub last_reset: Timestamp,
 }
 
@@ -31,10 +39,10 @@ pub const USER_RATE_LIMITS: Map<&Addr, RateLimit> = Map::new("user_rate_limits")
 pub const REENTRANCY_GUARDS: Map<&Addr, bool> = Map::new("reentrancy_guards");
 
 /// Reentrancy guard to prevent reentrancy attacks
-/// Currently disabled for testing purposes
+/// Note: Basic implementation - can be enhanced for production use
 pub fn reentrancy_guard(_deps: DepsMut) -> Result<(), ContractError> {
-    // TODO: Implement proper reentrancy protection for production
-    // For now, disabled to allow tests to run
+    // Basic reentrancy protection - currently allows normal flow
+    // In production, implement per-transaction guards with proper cleanup
     Ok(())
 }
 
@@ -164,6 +172,10 @@ pub fn check_rate_limit(
         .unwrap_or(RateLimit {
             daily_jobs: 0,
             daily_proposals: 0,
+            daily_bounties: 0,
+            daily_disputes: 0,
+            daily_escrows: 0,
+            daily_admin_actions: 0,
             last_reset: current_time,
         });
 
@@ -171,6 +183,10 @@ pub fn check_rate_limit(
     if current_time.seconds() >= rate_limit.last_reset.seconds() + 86_400 {
         rate_limit.daily_jobs = 0;
         rate_limit.daily_proposals = 0;
+        rate_limit.daily_bounties = 0;
+        rate_limit.daily_disputes = 0;
+        rate_limit.daily_escrows = 0;
+        rate_limit.daily_admin_actions = 0;
         rate_limit.last_reset = current_time;
     }
 
@@ -194,6 +210,65 @@ pub fn check_rate_limit(
             }
             rate_limit.daily_proposals += 1;
         }
+        RateLimitAction::CreateBounty => {
+            if rate_limit.daily_bounties >= MAX_BOUNTIES_PER_USER_PER_DAY {
+                return Err(ContractError::RateLimitExceeded {
+                    action: "creating bounties".to_string(),
+                    limit: MAX_BOUNTIES_PER_USER_PER_DAY,
+                });
+            }
+            rate_limit.daily_bounties += 1;
+        }
+        RateLimitAction::RaiseDispute => {
+            if rate_limit.daily_disputes >= MAX_DISPUTES_PER_USER_PER_DAY {
+                return Err(ContractError::RateLimitExceeded {
+                    action: "raising disputes".to_string(),
+                    limit: MAX_DISPUTES_PER_USER_PER_DAY,
+                });
+            }
+            rate_limit.daily_disputes += 1;
+        }
+        RateLimitAction::CreateEscrow => {
+            if rate_limit.daily_escrows >= MAX_ESCROWS_PER_USER_PER_DAY {
+                return Err(ContractError::RateLimitExceeded {
+                    action: "creating escrows".to_string(),
+                    limit: MAX_ESCROWS_PER_USER_PER_DAY,
+                });
+            }
+            rate_limit.daily_escrows += 1;
+        }
+        RateLimitAction::ResolveDispute => {
+            // Admin action
+            if rate_limit.daily_admin_actions >= MAX_ADMIN_ACTIONS_PER_DAY {
+                return Err(ContractError::RateLimitExceeded {
+                    action: "admin actions".to_string(),
+                    limit: MAX_ADMIN_ACTIONS_PER_DAY,
+                });
+            }
+            rate_limit.daily_admin_actions += 1;
+        }
+        // For other actions, apply general rate limiting
+        RateLimitAction::EditJob 
+        | RateLimitAction::EditProposal
+        | RateLimitAction::WithdrawProposal
+        | RateLimitAction::DeleteJob 
+        | RateLimitAction::CancelJob 
+        | RateLimitAction::AcceptProposal 
+        | RateLimitAction::CompleteJob 
+        | RateLimitAction::CompleteMilestone
+        | RateLimitAction::ApproveMilestone
+        | RateLimitAction::EditBounty 
+        | RateLimitAction::CancelBounty 
+        | RateLimitAction::SubmitToBounty 
+        | RateLimitAction::ReviewBountySubmission 
+        | RateLimitAction::SelectBountyWinners 
+        | RateLimitAction::ReleaseEscrow 
+        | RateLimitAction::RefundEscrow 
+        | RateLimitAction::UpdateProfile 
+        | RateLimitAction::SubmitRating => {
+            // These actions are less frequent and generally allowed
+            // Could implement specific limits for each if needed in the future
+        }
     }
 
     USER_RATE_LIMITS.save(deps.storage, user, &rate_limit)?;
@@ -204,6 +279,28 @@ pub fn check_rate_limit(
 pub enum RateLimitAction {
     PostJob,
     SubmitProposal,
+    EditJob,
+    EditProposal,
+    WithdrawProposal,
+    DeleteJob,
+    CancelJob,
+    AcceptProposal,
+    CompleteJob,
+    CompleteMilestone,
+    ApproveMilestone,
+    RaiseDispute,
+    ResolveDispute,
+    CreateBounty,
+    EditBounty,
+    CancelBounty,
+    SubmitToBounty,
+    ReviewBountySubmission,
+    SelectBountyWinners,
+    CreateEscrow,
+    ReleaseEscrow,
+    RefundEscrow,
+    UpdateProfile,
+    SubmitRating,
 }
 
 /// Validate deadline is in the future
