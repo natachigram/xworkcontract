@@ -87,10 +87,12 @@ temp/
 # !*.toml
 
 # Critical deployment files that must be committed
-!deploy_xion.sh
-!setup_deployment.sh
-!scripts/deploy.sh
 !artifacts/checksums.txt
 !artifacts/xworks_freelance_contract.wasm
 !schema/*.json
 !examples/schema.rs
+
+# Deployment scripts (can be regenerated)
+deploy_xion.sh
+setup_deployment.sh
+scripts/deploy.sh
