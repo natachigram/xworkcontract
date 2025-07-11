@@ -69,14 +69,12 @@ pub enum ExecuteMsg {
     // Proposal Management
     SubmitProposal {
         job_id: u64,
-        bid_amount: Uint128,
         cover_letter: String,
         delivery_time_days: u64,
         milestones: Option<Vec<ProposalMilestone>>,
     },
     EditProposal {
         proposal_id: u64,
-        bid_amount: Option<Uint128>,
         cover_letter: Option<String>,
         delivery_time_days: Option<u64>,
         milestones: Option<Vec<ProposalMilestone>>,

@@ -60,7 +60,6 @@ pub struct Proposal {
     pub id: u64,
     pub freelancer: Addr,
     pub job_id: u64,
-    pub bid_amount: Uint128,
     pub cover_letter_hash: String, // IPFS hash for cover letter (max 750 chars off-chain)
     pub resume_hash: String,       // IPFS hash for resume (PDF, max 5MB off-chain)
     pub delivery_time_days: u64,

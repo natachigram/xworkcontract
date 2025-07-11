@@ -83,6 +83,13 @@ pub fn create_escrow_internal(
 
     let job = JOBS.load(deps.storage, job_id)?;
     
+    // Cannot create escrow for free projects
+    if job.budget.is_zero() {
+        return Err(ContractError::InvalidInput {
+            error: "Cannot create escrow for free projects".to_string(),
+        });
+    }
+    
     // Only job poster can create escrow
     if job.poster != info.sender {
         return Err(ContractError::Unauthorized {});

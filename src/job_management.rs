@@ -61,8 +61,16 @@ pub fn execute_post_job(
     )?;
 
     // Validate payment
-    if info.funds.len() != 1 || info.funds[0].amount != budget {
-        return Err(ContractError::InvalidFunds {});
+    if budget.is_zero() {
+        // Free project - no payment required
+        if !info.funds.is_empty() {
+            return Err(ContractError::InvalidFunds {});
+        }
+    } else {
+        // Paid project - payment must match budget
+        if info.funds.len() != 1 || info.funds[0].amount != budget {
+            return Err(ContractError::InvalidFunds {});
+        }
     }
 
     // Get next job ID
@@ -140,7 +148,6 @@ pub fn execute_submit_proposal(
     env: Env,
     info: MessageInfo,
     job_id: u64,
-    bid_amount: Uint128,
     cover_letter: String,
     delivery_time_days: u64,
     milestones: Option<Vec<crate::state::ProposalMilestone>>,
@@ -156,7 +163,6 @@ pub fn execute_submit_proposal(
 
     // Validate inputs
     validate_content_inputs!(&cover_letter, &cover_letter);
-    validate_budget(bid_amount)?;
 
     // Generate cover letter hash (simple implementation, in production would be IPFS hash)
     let cover_letter_hash = format!("hash_{}", cover_letter.len());
@@ -195,7 +201,6 @@ pub fn execute_submit_proposal(
         id: proposal_id,
         freelancer: info.sender.clone(),
         job_id,
-        bid_amount,
         cover_letter_hash,          // Using generated hash
         resume_hash: String::new(), // TODO: Store actual IPFS hash
         delivery_time_days,
@@ -224,7 +229,7 @@ pub fn execute_submit_proposal(
         proposal_id,
         &info.sender,
         "job_id" => job_id.to_string(),
-        "budget" => bid_amount.to_string()
+        "delivery_time_days" => delivery_time_days.to_string()
     ))
 }
 
@@ -598,7 +603,6 @@ pub fn execute_edit_proposal(
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
-    bid_amount: Option<Uint128>,
     cover_letter: Option<String>,
     delivery_time_days: Option<u64>,
     milestones: Option<Vec<ProposalMilestone>>,
@@ -618,10 +622,6 @@ pub fn execute_edit_proposal(
     // In a full implementation, you would add status field to Proposal struct
 
     // Update fields if provided
-    if let Some(new_amount) = bid_amount {
-        proposal.bid_amount = new_amount;
-    }
-
     if let Some(new_cover_letter) = cover_letter {
         proposal.cover_letter_hash = new_cover_letter;
     }

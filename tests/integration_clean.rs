@@ -14,7 +14,6 @@ const ADMIN: &str = "admin";
 const CLIENT: &str = "client";
 const FREELANCER: &str = "freelancer";
 
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -118,7 +117,6 @@ mod tests {
         let freelancer_info = mock_info(FREELANCER, &[]);
         let proposal_msg = ExecuteMsg::SubmitProposal {
             job_id: 0,
-            bid_amount: Uint128::new(4500),
             cover_letter: "I am the best freelancer for this job".to_string(),
             delivery_time_days: 25,
             milestones: None,
@@ -133,10 +131,7 @@ mod tests {
         let proposals_response: ProposalsResponse = from_json(&res).unwrap();
 
         assert_eq!(proposals_response.proposals.len(), 1);
-        assert_eq!(
-            proposals_response.proposals[0].bid_amount,
-            Uint128::new(4500)
-        );
+        // bid_amount removed; validate freelancer field
         assert_eq!(
             proposals_response.proposals[0].freelancer,
             Addr::unchecked(FREELANCER)
@@ -165,7 +160,6 @@ mod tests {
         let freelancer_info = mock_info(FREELANCER, &[]);
         let proposal_msg = ExecuteMsg::SubmitProposal {
             job_id: 0,
-            bid_amount: Uint128::new(4500),
             cover_letter: "Great proposal".to_string(),
             delivery_time_days: 25,
             milestones: None,
@@ -214,7 +208,7 @@ mod tests {
         let freelancer_info = mock_info(FREELANCER, &[]);
         let proposal_msg = ExecuteMsg::SubmitProposal {
             job_id: 0,
-            bid_amount: Uint128::new(9000),
+            // single cover_letter field
             cover_letter: "Expert Rust developer".to_string(),
             delivery_time_days: 25,
             milestones: None,
@@ -264,18 +258,19 @@ mod tests {
             milestones: None,
         };
 
-        let result = execute(deps.as_mut(), env.clone(), client_info.clone(), invalid_job);
-        assert!(result.is_err());
-        match result.unwrap_err() {
+        // Execute and capture error directly
+        let err =
+            execute(deps.as_mut(), env.clone(), client_info.clone(), invalid_job).unwrap_err();
+        match err {
             ContractError::InvalidInput { .. } => {} // Expected
             _ => panic!("Expected invalid input error"),
         }
 
-        // Test zero budget
+        // Test zero budget free project should succeed
         let zero_budget_job = ExecuteMsg::PostJob {
             title: "Valid Title".to_string(),
             description: "Valid description".to_string(),
-            budget: Uint128::zero(), // Invalid zero budget
+            budget: Uint128::zero(), // Zero budget for free project
             category: "Development".to_string(),
             skills_required: vec!["Rust".to_string()],
             duration_days: 30,
@@ -283,12 +278,14 @@ mod tests {
             milestones: None,
         };
 
-        let result = execute(deps.as_mut(), env, client_info, zero_budget_job);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ContractError::InvalidInput { .. } => {} // Expected
-            _ => panic!("Expected invalid input error"),
-        }
+        // Execute should succeed for free projects
+        assert!(
+            execute(deps.as_mut(), env, client_info, zero_budget_job)
+                .unwrap()
+                .attributes
+                .len()
+                > 0
+        );
     }
 
     #[test]
@@ -400,15 +397,14 @@ mod tests {
                 milestones: None,
             };
 
-            let result = execute(deps.as_mut(), env.clone(), client_info.clone(), job_msg);
-
             if i < 5 {
                 // First 5 should succeed
-                assert!(result.is_ok());
+                assert!(execute(deps.as_mut(), env.clone(), client_info.clone(), job_msg).is_ok());
             } else {
                 // 6th should fail due to rate limiting
-                assert!(result.is_err());
-                match result.unwrap_err() {
+                let err =
+                    execute(deps.as_mut(), env.clone(), client_info.clone(), job_msg).unwrap_err();
+                match err {
                     ContractError::RateLimitExceeded { .. } => {} // Expected
                     _ => panic!("Expected rate limit error"),
                 }
@@ -418,7 +414,6 @@ mod tests {
 }
 
 // Integration tests for full workflow
-#[cfg(test)]
 mod integration_tests {
     use super::*;
 
@@ -460,7 +455,7 @@ mod integration_tests {
         let proposal_info = mock_info(FREELANCER, &[]);
         let proposal_msg = ExecuteMsg::SubmitProposal {
             job_id: 0,
-            bid_amount: Uint128::new(9000),
+            // single cover_letter field
             cover_letter: "I have 5 years experience in blockchain development...".to_string(),
             delivery_time_days: 45,
             milestones: None,
@@ -524,7 +519,6 @@ mod integration_tests {
 }
 
 // Performance and stress tests
-#[cfg(test)]
 mod performance_tests {
     use super::*;
 

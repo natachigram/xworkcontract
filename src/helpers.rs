@@ -11,9 +11,9 @@ use crate::error::ContractError;
 
 // Validation helpers
 pub fn validate_job_title(title: &str) -> Result<(), ContractError> {
-    if title.is_empty() || title.len() > 200 {
+    if title.is_empty() || title.len() > 100 {
         return Err(ContractError::InvalidInput {
-            error: "Title must be between 1-200 characters".to_string(),
+            error: "Title must be between 1-100 characters".to_string(),
         });
     }
     Ok(())
@@ -29,11 +29,19 @@ pub fn validate_job_description(description: &str) -> Result<(), ContractError> 
 }
 
 pub fn validate_budget(budget: Uint128) -> Result<(), ContractError> {
+    // Allow budget = 0 for free projects
     if budget.is_zero() {
-        return Err(ContractError::InvalidInput {
-            error: "Budget must be greater than zero".to_string(),
+        return Ok(());
+    }
+    
+    // For paid projects, enforce minimum escrow amount
+    let min_escrow = Uint128::new(1_000); // 0.001 XION minimum
+    if budget < min_escrow {
+        return Err(ContractError::EscrowAmountTooLow {
+            min: min_escrow.to_string(),
         });
     }
+    
     Ok(())
 }
 

@@ -180,7 +180,6 @@ pub fn execute(
         // Proposal Management
         ExecuteMsg::SubmitProposal {
             job_id,
-            bid_amount,
             cover_letter,
             delivery_time_days,
             milestones,
@@ -189,7 +188,6 @@ pub fn execute(
             env,
             info,
             job_id,
-            bid_amount,
             cover_letter,
             delivery_time_days,
             milestones,
@@ -197,7 +195,6 @@ pub fn execute(
 
         ExecuteMsg::EditProposal {
             proposal_id,
-            bid_amount,
             cover_letter,
             delivery_time_days,
             milestones,
@@ -206,7 +203,6 @@ pub fn execute(
             env,
             info,
             proposal_id,
-            bid_amount,
             cover_letter,
             delivery_time_days,
             milestones,
@@ -648,7 +644,7 @@ fn execute_accept_proposal(
         .add_attribute("job_id", job_id.to_string())
         .add_attribute("proposal_id", proposal_id.to_string())
         .add_attribute("freelancer", proposal.freelancer.to_string())
-        .add_attribute("bid_amount", proposal.bid_amount.to_string()))
+        .add_attribute("delivery_time_days", proposal.delivery_time_days.to_string()))
 }
 
 fn execute_complete_job(

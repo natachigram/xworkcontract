@@ -1,23 +1,29 @@
 #!/bin/bash
-
-# XWorks Contract Deployment Script for Xion Blockchain
-# This script handles the complete deployment process
+# XWork Contract Deployment Script - Updated for Testnet Integration
+# This script handles the complete deployment process with proper testnet support
 
 set -e
+
+# Load environment if available
+if [ -f ".env.testnet" ]; then
+    source .env.testnet
+    echo "📁 Loaded testnet environment"
+fi
 
 # Configuration
 CONTRACT_NAME="xworks-freelance-contract"
 NETWORK=${1:-"testnet"}  # testnet or mainnet
-ADMIN_KEY=${2:-"admin"}
-RUST_OPTIMIZER_VERSION="0.15.0"
+ADMIN_KEY=${2:-"${KEY:-benchmark}"}
+CHAIN_BINARY="${CHAIN_BINARY:-wasmd}"
 
 # Network configurations
 case $NETWORK in
   "testnet")
-    CHAIN_ID="xion-testnet-1"
-    RPC_URL="https://testnet-rpc.xion.burnt.com:443"
-    DENOM="uxion"
-    GAS_PRICES="0.025uxion"
+    CHAIN_ID="${CHAIN_ID:-xion-testnet-1}"
+    RPC_URL="${NODE#--node }"  # Remove --node prefix if present
+    RPC_URL="${RPC_URL:-https://testnet-rpc.xion.org:443}"
+    DENOM="${DENOM:-uxion}"
+    GAS_PRICES="0.025$DENOM"
     ;;
   "mainnet")
     CHAIN_ID="xion-mainnet-1"
@@ -39,9 +45,9 @@ echo "RPC URL: $RPC_URL"
 check_prerequisites() {
     echo "🔍 Checking prerequisites..."
     
-    # Check if xiond is installed
-    if ! command -v xiond &> /dev/null; then
-        echo "❌ xiond is not installed. Please install Xion CLI first."
+    # Check if chain binary is installed
+    if ! command -v $CHAIN_BINARY &> /dev/null; then
+        echo "❌ $CHAIN_BINARY is not installed. Run ./scripts/setup_testnet.sh first"
         echo "Visit: https://docs.burnt.com/xion/learn/installation"
         exit 1
     fi

@@ -8,7 +8,7 @@ use crate::error::ContractError;
 const MAX_PLATFORM_FEE_PERCENT: u64 = 10; // 10% maximum
 const MIN_ESCROW_AMOUNT: Uint128 = Uint128::new(1_000); // 0.001 XION
 const MAX_JOB_DURATION_DAYS: u64 = 365; // 1 year maximum
-const MAX_TITLE_LENGTH: usize = 200;
+const MAX_TITLE_LENGTH: usize = 100;
 const MAX_DESCRIPTION_LENGTH: usize = 10_000;
 const MAX_COVER_LETTER_LENGTH: usize = 5_000;
 const MAX_COMMENT_LENGTH: usize = 1_000;
