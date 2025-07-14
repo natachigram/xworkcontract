@@ -1,4 +1,3 @@
-#![allow(unused_variables, dead_code)]
 use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
 use cosmwasm_std::testing::{MockApi, MockQuerier, MockStorage};
 use cosmwasm_std::{coins, OwnedDeps, Uint128};

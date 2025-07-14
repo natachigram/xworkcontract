@@ -1,2 +1,1 @@
-0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5  test_contract.wasm
 fa0205f60bdb75a81f107f7879950b5f72c4db814402bbe821faf46db58a168c  xworks_freelance_contract.wasm

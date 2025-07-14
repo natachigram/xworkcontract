@@ -128,67 +128,7 @@ pub fn validate_job_creation_inputs(
     Ok(())
 }
 
-/*
-// Generic storage iteration helpers - DISABLED due to lifetime issues
-// These can be re-enabled and fixed when needed for pagination functionality
-pub fn iterate_and_filter<K, V, F, T>(
-    storage: &dyn Storage,
-    map: &Map<K, V>,
-    filter_fn: F,
-    limit: Option<u32>,
-) -> StdResult<Vec<T>>
-where
-    K: PrimaryKey<'static> + KeyDeserialize + 'static,
-    V: serde::Serialize + serde::de::DeserializeOwned,
-    F: Fn(&V) -> Option<T>,
-{
-    let limit = limit.unwrap_or(50).min(100) as usize;
-    let mut results = Vec::new();
 
-    let items: StdResult<Vec<_>> = map.range(storage, None, None, Order::Descending).collect();
-
-    if let Ok(item_pairs) = items {
-        for (_, item) in item_pairs {
-            if let Some(result) = filter_fn(&item) {
-                results.push(result);
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(results)
-}
-*/
-
-/*
-// Also disabled due to lifetime issues
-pub fn count_items_with_filter<K, V, F>(
-    storage: &dyn Storage,
-    map: &Map<K, V>,
-    filter_fn: F,
-) -> StdResult<u64>
-where
-    K: PrimaryKey<'static> + KeyDeserialize + 'static,
-    V: serde::Serialize + serde::de::DeserializeOwned,
-    F: Fn(&V) -> bool,
-{
-    let mut count = 0u64;
-
-    let items: StdResult<Vec<_>> = map.range(storage, None, None, Order::Ascending).collect();
-
-    if let Ok(item_pairs) = items {
-        for (_, item) in item_pairs {
-            if filter_fn(&item) {
-                count += 1;
-            }
-        }
-    }
-
-    Ok(count)
-}
-*/
 
 // Helper function to build standard job/bounty query responses
 pub fn build_jobs_response(

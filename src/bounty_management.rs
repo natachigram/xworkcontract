@@ -5,21 +5,15 @@ use crate::helpers::{
     validate_job_description, validate_job_title,
 };
 use crate::job_management::calculate_platform_fee;
-use crate::msg::{
-    BountiesResponse, BountyResponse, BountySubmissionsResponse,
-};
+use crate::msg::{BountiesResponse, BountyResponse, BountySubmissionsResponse};
 use crate::security::{check_rate_limit, reentrancy_guard, validate_text_inputs, RateLimitAction};
 use crate::state::{
     Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, RewardTier, BOUNTIES,
     BOUNTY_SUBMISSIONS, CONFIG, ESCROWS, NEXT_BOUNTY_ID, NEXT_BOUNTY_SUBMISSION_ID,
 };
-use crate::{
-    apply_security_checks, build_success_response,
-    validate_content_inputs,
-};
+use crate::{apply_security_checks, build_success_response, validate_content_inputs};
 use cosmwasm_std::{
-    coins, BankMsg, Deps, DepsMut, Env, MessageInfo, Order, Response, StdResult,
-    Uint128,
+    coins, BankMsg, Deps, DepsMut, Env, MessageInfo, Order, Response, StdResult, Uint128,
 };
 
 /// Create a new bounty
@@ -50,16 +44,13 @@ pub fn execute_create_bounty(
     // Validate inputs
     validate_content_inputs!(&title, &description);
     validate_budget(total_reward)?;
-    validate_duration(duration_days, config.max_job_duration_days)?; // Use existing job duration config
+    validate_duration(duration_days, config.max_job_duration_days)?;
     validate_string_field(&category, "Category", 1, 50)?;
     validate_collection_size(&skills_required, "Skills required", 1, 20)?;
     validate_collection_size(&submission_requirements, "Submission requirements", 1, 10)?;
     validate_collection_size(&judging_criteria, "Judging criteria", 1, 10)?;
-    // Note: company and location are not in the schema, so removing validation
 
-    // Validate max submissions (simplified)
     if max_submissions == 0 || max_submissions > 100 {
-        // Use reasonable default instead of config field
         return Err(ContractError::InvalidInput {
             error: "Max submissions must be between 1 and 100".to_string(),
         });
@@ -82,35 +73,34 @@ pub fn execute_create_bounty(
     let bounty_id = NEXT_BOUNTY_ID.load(deps.storage)?;
     NEXT_BOUNTY_ID.save(deps.storage, &(bounty_id + 1))?;
 
-    // Create bounty using actual schema fields
     let bounty = Bounty {
         id: bounty_id,
-        poster: info.sender.clone(), // Use 'poster' instead of 'creator'
+        poster: info.sender.clone(),
         title,
         description,
-        requirements: submission_requirements, // Map to 'requirements' field
+        requirements: submission_requirements,
         total_reward,
         category: category.clone(),
         skills_required,
-        submission_deadline: get_future_timestamp(env.block.time, duration_days), // Use deadline instead of expires_at
-        review_period_days: 7, // Default review period
+        submission_deadline: get_future_timestamp(env.block.time, duration_days),
+        review_period_days: 7,
         max_winners: if winner_selection_type == "single" {
             1
         } else {
             max_submissions.min(10).into()
-        }, // Reasonable default
+        },
         reward_distribution: vec![crate::state::RewardTier {
             position: 1,
             percentage: 100,
             amount: total_reward,
-        }], // Simple single winner distribution for now
-        documents: vec![],     // Empty for now
+        }],
+        documents: vec![],
         status: BountyStatus::Open,
         created_at: env.block.time,
         updated_at: env.block.time,
-        total_submissions: 0, // Use 'total_submissions' instead of 'submission_count'
+        total_submissions: 0,
         selected_winners: vec![],
-        escrow_id: None, // Set after escrow creation
+        escrow_id: None,
     };
 
     BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
@@ -125,7 +115,7 @@ pub fn execute_create_bounty(
         amount: total_reward,
         platform_fee: calculate_platform_fee(total_reward, config.platform_fee_percent),
         funded_at: env.block.time,
-        released: false, // Use 'released' boolean instead of status enum
+        released: false,
         dispute_status: crate::state::DisputeStatus::None,
         dispute_raised_at: None,
         dispute_deadline: None,
@@ -192,44 +182,28 @@ pub fn execute_edit_bounty(
         bounty.skills_required = new_skills.clone();
     }
 
-    if let Some(_new_duration) = duration_days {
-        // validate_duration(new_duration, config.max_job_duration_days)?; // Use max_job_duration_days instead
-        // bounty.duration_days = new_duration; // duration_days field doesn't exist
-        // bounty.expires_at = get_future_timestamp(bounty.created_at, new_duration); // expires_at field doesn't exist
-    }
+    if let Some(_new_duration) = duration_days {}
 
     if let Some(new_max_submissions) = max_submissions {
-        // if new_max_submissions == 0 || new_max_submissions > config.max_bounty_submissions {
-        //     return Err(ContractError::InvalidInput {
-        //         error: format!(
-        //             "Max submissions must be between 1 and {}",
-        //             config.max_bounty_submissions
-        //         ),
-        //     });
-        // }
-        // bounty.max_submissions = new_max_submissions; // max_submissions field doesn't exist
         bounty.total_submissions = new_max_submissions as u64; // Convert u32 to u64
     }
 
     if let Some(ref new_requirements) = submission_requirements {
         validate_collection_size(new_requirements, "Submission requirements", 1, 10)?;
-        // bounty.submission_requirements = new_requirements.clone(); // Field doesn't exist
+
         bounty.requirements = new_requirements.clone(); // Use requirements instead
     }
 
     if let Some(ref new_criteria) = judging_criteria {
         validate_collection_size(new_criteria, "Judging criteria", 1, 10)?;
-        // bounty.judging_criteria = new_criteria.clone(); // Field doesn't exist
     }
 
     if let Some(new_company) = company {
         validate_optional_string_field(&Some(new_company.clone()), "Company", 100)?;
-        // bounty.company = Some(new_company); // Field doesn't exist
     }
 
     if let Some(new_location) = location {
         validate_optional_string_field(&Some(new_location.clone()), "Location", 100)?;
-        // bounty.location = Some(new_location); // Field doesn't exist
     }
 
     bounty.updated_at = env.block.time;
@@ -265,8 +239,8 @@ pub fn execute_cancel_bounty(
     // Release escrow
     let escrow_id = format!("bounty_{}", bounty_id);
     if let Ok(mut escrow) = ESCROWS.load(deps.storage, &escrow_id) {
-        escrow.released = true; // Use boolean instead of status
-                                // released_at field doesn't exist in EscrowState
+        escrow.released = true;
+
         ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
     }
 
@@ -300,19 +274,13 @@ pub fn execute_submit_to_bounty(
     let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
     validate_bounty_status_for_operation(&bounty.status, &[BountyStatus::Open], "submit to")?;
 
-    // Check if bounty has expired
-    // if env.block.time >= bounty.expires_at { // expires_at field doesn't exist
     if env.block.time >= bounty.submission_deadline {
-        // Use submission_deadline instead
         return Err(ContractError::InvalidInput {
             error: "Bounty has expired".to_string(),
         });
     }
 
-    // Check if max submissions reached
-    // if bounty.submission_count >= bounty.max_submissions { // max_submissions field doesn't exist
     if bounty.total_submissions >= 100 {
-        // Use reasonable limit instead
         return Err(ContractError::InvalidInput {
             error: "Maximum submissions reached".to_string(),
         });
@@ -413,8 +381,6 @@ pub fn execute_review_bounty_submission(
     submission.status = status;
     submission.review_notes = reviewer_notes; // Use correct field name
     submission.score = score.map(|s| s as u8); // Convert u32 to u8
-                                               // reviewed_at and updated_at don't exist in schema
-                                               // removed those field assignments
 
     BOUNTY_SUBMISSIONS.save(deps.storage, submission_id, &submission)?;
 
@@ -491,10 +457,17 @@ pub fn execute_select_bounty_winners(
     let reward_tiers: Vec<RewardTier> = reward_distribution
         .iter()
         .enumerate()
-        .map(|(i, &amount)| RewardTier {
-            position: (i + 1) as u64,
-            percentage: 0, // TODO: Calculate percentage based on amount and total
-            amount,
+        .map(|(i, &amount)| {
+            let percentage = if bounty.total_reward.is_zero() {
+                0
+            } else {
+                (amount.u128() * 100 / bounty.total_reward.u128()) as u64
+            };
+            RewardTier {
+                position: (i + 1) as u64,
+                percentage,
+                amount,
+            }
         })
         .collect();
 

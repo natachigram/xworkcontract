@@ -201,12 +201,12 @@ pub fn execute_submit_proposal(
         id: proposal_id,
         freelancer: info.sender.clone(),
         job_id,
-        cover_letter_hash,          // Using generated hash
-        resume_hash: String::new(), // TODO: Store actual IPFS hash
+        cover_letter_hash,
+        resume_hash: String::new(),
         delivery_time_days,
-        contact_preference: String::new(), // TODO: Extract from parameters
-        agreed_to_terms: true,             // TODO: Extract from parameters
-        agreed_to_escrow: true,            // TODO: Extract from parameters
+        contact_preference: String::new(),
+        agreed_to_terms: true,
+        agreed_to_escrow: true,
         submitted_at: env.block.time,
         milestones: milestones.unwrap_or_default(),
     };

@@ -91,18 +91,6 @@ pub fn execute_update_config(
         // config.max_bounty_reward = new_max; // Field doesn't exist in Config
     }
 
-    // Validate budget ranges - commented out since fields don't exist in Config
-    // if config.min_job_budget >= config.max_job_budget {
-    //     return Err(ContractError::InvalidInput {
-    //         error: "Min job budget must be less than max job budget".to_string(),
-    //     });
-    // }
-
-    // if config.min_bounty_reward >= config.max_bounty_reward {
-    //     return Err(ContractError::InvalidInput {
-    //         error: "Min bounty reward must be less than max bounty reward".to_string(),
-    //     });
-    // }
 
     CONFIG.save(deps.storage, &config)?;
 
@@ -196,9 +184,9 @@ pub fn execute_block_address(
     let audit_log = AuditLog {
         id: format!("block_{}_{}", addr_to_block, env.block.time.seconds()),
         action: "block_address".to_string(),
-        user: info.sender.clone(), // Use 'user' instead of 'admin'
-        job_id: None,              // No job_id for this action
-        proposal_id: None,         // No proposal_id for this action
+        user: info.sender.clone(), 
+        job_id: None,             
+        proposal_id: None,         
         timestamp: env.block.time,
         success: true,
         error: None,
@@ -285,7 +273,7 @@ pub fn execute_reset_rate_limit(
     let audit_log = AuditLog {
         id: format!("reset_{}_{}", addr_to_reset, env.block.time.seconds()),
         action: "reset_rate_limit".to_string(),
-        user: info.sender.clone(), // Use 'user' instead of 'admin'
+        user: info.sender.clone(), 
         job_id: None,
         proposal_id: None,
         timestamp: env.block.time,

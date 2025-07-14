@@ -1,0 +1,7 @@
+{
+    "network": "xion-testnet-2",
+    "contract_address": "xion12jsycykvhfj33yw8vrsdllxhv63pdmx80q4cxhf3zxvu452qafwq5f40f4",
+    "code_id": 1387,
+    "admin": "xion1nvx9jzdgddnk4vajjhruz3ta20l656459auntt",
+    "rpc_endpoint": "https://rpc.xion-testnet-2.burnt.com:443"
+}
