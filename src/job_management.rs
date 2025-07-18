@@ -1,6 +1,3 @@
-use crate::category_skill_manager::{
-    calculate_budget_range, get_or_create_category_id, get_or_create_skill_ids,
-};
 use crate::contract_helpers::*;
 use crate::error::ContractError;
 use crate::hash_utils::{
@@ -10,10 +7,9 @@ use crate::helpers::{ensure_not_paused, get_future_timestamp, validate_budget, v
 use crate::msg::{JobResponse, JobsResponse, MilestoneInput, ProposalResponse, ProposalsResponse};
 use crate::security::{check_rate_limit, reentrancy_guard, RateLimitAction};
 use crate::state::{
-    ContactPreference, Job, JobStatus, Proposal, ProposalMilestone, ProposalStatus, Rating,
-    ACTIVE_JOBS, CONFIG, CONTENT_HASHES, DISPUTES, ENTITY_TO_HASH, ESCROWS, HASH_TO_ENTITY, JOBS,
-    JOBS_BY_BUDGET_RANGE, JOBS_BY_CATEGORY, JOBS_BY_SKILL, JOB_PROPOSALS, NEXT_JOB_ID,
-    NEXT_PROPOSAL_ID, PROPOSALS, RATINGS,
+    ContactPreference, Job, JobStatus, Proposal, ProposalMilestone, ProposalStatus, Rating, CONFIG,
+    CONTENT_HASHES, DISPUTES, ENTITY_TO_HASH, ESCROWS, HASH_TO_ENTITY, JOBS, JOB_PROPOSALS,
+    NEXT_JOB_ID, NEXT_PROPOSAL_ID, PROPOSALS, RATINGS,
 };
 // Import macros explicitly
 use crate::{apply_security_checks, build_success_response, ensure_admin, validate_content_inputs};
@@ -42,10 +38,10 @@ pub fn execute_post_job(
     company: Option<String>,
     location: Option<String>,
     documents: Option<Vec<String>>,
-    milestones: Option<Vec<MilestoneInput>>,
-    experience_level: u8,
-    is_remote: bool,
-    urgency_level: u8,
+    _milestones: Option<Vec<MilestoneInput>>,
+    _experience_level: u8,
+    _is_remote: bool,
+    _urgency_level: u8,
     off_chain_storage_key: String,
 ) -> Result<Response, ContractError> {
     // 🔒 Apply security checks
@@ -56,18 +52,6 @@ pub fn execute_post_job(
     validate_content_inputs!(&title, &description);
     validate_budget(budget)?;
     validate_duration(duration_days, config.max_job_duration_days)?;
-
-    // 🎯 Validate on-chain fields
-    if experience_level < 1 || experience_level > 3 {
-        return Err(ContractError::InvalidInput {
-            error: "Experience level must be 1 (Entry), 2 (Mid), or 3 (Senior)".to_string(),
-        });
-    }
-    if urgency_level < 1 || urgency_level > 4 {
-        return Err(ContractError::InvalidInput {
-            error: "Urgency level must be 1-4".to_string(),
-        });
-    }
 
     // 💰 Validate payment
     if budget.is_zero() {
@@ -83,11 +67,6 @@ pub fn execute_post_job(
     // 🆔 Generate job ID
     let job_id = NEXT_JOB_ID.load(deps.storage)?;
     NEXT_JOB_ID.save(deps.storage, &(job_id + 1))?;
-
-    // 🏷️ Convert categories and skills to IDs for efficient storage
-    let category_id = get_or_create_category_id(deps.branch(), &category)?;
-    let skill_tags = get_or_create_skill_ids(deps.branch(), &skills_required)?;
-    let budget_range = calculate_budget_range(budget);
 
     // 🌐 Create off-chain content bundle
     let documents_vec = documents.unwrap_or_default();
@@ -132,27 +111,11 @@ pub fn execute_post_job(
         escrow_id: Some(format!("job_{}", job_id)),
         total_proposals: 0,
         content_hash,
-        category_id,
-        skill_tags: skill_tags.clone(),
-        budget_range,
-        experience_level,
-        is_remote,
-        has_milestones: milestones.is_some(),
-        urgency_level,
     };
 
     JOBS.save(deps.storage, job_id, &job)?;
 
-    // 🔍 Update search indexes for fast filtering
-    update_job_search_indexes(
-        deps.branch(),
-        job_id,
-        category_id,
-        budget_range,
-        &skill_tags,
-    )?;
-
-    // 💰 Create escrow
+    //  Create escrow
     let escrow_id = format!("job_{}", job_id);
     let escrow = crate::state::EscrowState {
         id: escrow_id.clone(),
@@ -176,7 +139,6 @@ pub fn execute_post_job(
         job_id,
         &info.sender,
         "budget" => budget.to_string(),
-        "category_id" => category_id.to_string(),
         "content_hash" => content_hash_str,
         "off_chain_key" => off_chain_storage_key,
         "escrow_id" => escrow_id
@@ -196,7 +158,6 @@ pub fn execute_submit_proposal(
     contact_preference: ContactPreference,
     agreed_to_terms: bool,
     agreed_to_escrow: bool,
-    estimated_hours: Option<u16>,
     milestones: Option<Vec<crate::state::ProposalMilestone>>,
     _portfolio_samples: Option<Vec<String>>,
     _off_chain_storage_key: String,
@@ -264,11 +225,7 @@ pub fn execute_submit_proposal(
         env.block.time.seconds(),
     )?;
 
-    // 📊 Calculate proposal score (can be enhanced with ML later)
-    let proposal_score =
-        calculate_proposal_score(&cover_letter, estimated_hours, milestones.as_ref());
-
-    // 🗄️ Store hash mappings
+    // ️ Store hash mappings
     let entity_key = format!("proposal_{}", proposal_id);
     CONTENT_HASHES.save(deps.storage, &content_hash_str, &content_hash)?;
     HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
@@ -285,10 +242,6 @@ pub fn execute_submit_proposal(
         agreed_to_escrow,
         submitted_at: env.block.time,
         content_hash,
-        proposal_score,
-        has_milestones: milestones.is_some(),
-        milestone_count: milestones.as_ref().map(|m| m.len() as u8).unwrap_or(0),
-        estimated_hours: estimated_hours.unwrap_or(0),
     };
 
     PROPOSALS.save(deps.storage, proposal_id, &proposal)?;
@@ -351,7 +304,6 @@ pub fn execute_edit_job(
         validate_budget(new_budget)?;
         if job.budget != new_budget {
             job.budget = new_budget;
-            job.budget_range = calculate_budget_range(new_budget);
             metadata_changed = true;
         }
     }
@@ -366,24 +318,6 @@ pub fn execute_edit_job(
     }
 
     // 🏷️ Update category and skills if changed
-    if let Some(ref new_category) = category {
-        let new_category_id = get_or_create_category_id(deps.branch(), new_category)?;
-        if job.category_id != new_category_id {
-            job.category_id = new_category_id;
-            content_changed = true;
-            metadata_changed = true;
-        }
-    }
-
-    if let Some(ref new_skills) = skills_required {
-        let new_skill_tags = get_or_create_skill_ids(deps.branch(), new_skills)?;
-        if job.skill_tags != new_skill_tags {
-            job.skill_tags = new_skill_tags;
-            content_changed = true;
-            metadata_changed = true;
-        }
-    }
-
     // 🌐 If content fields changed, create new off-chain bundle
     if title.is_some()
         || description.is_some()
@@ -453,17 +387,6 @@ pub fn execute_edit_job(
     if metadata_changed || content_changed {
         job.updated_at = env.block.time;
         JOBS.save(deps.storage, job_id, &job)?;
-
-        // 🔍 Update search indexes if metadata changed
-        if metadata_changed {
-            update_job_search_indexes(
-                deps.branch(),
-                job_id,
-                job.category_id,
-                job.budget_range,
-                &job.skill_tags,
-            )?;
-        }
     }
 
     Ok(build_success_response!(
@@ -1027,81 +950,6 @@ pub fn execute_resolve_dispute(
         .add_attribute("resolution_length", resolution.len().to_string());
 
     Ok(response)
-}
-
-/// 🔍 Update search indexes for efficient job filtering
-fn update_job_search_indexes(
-    deps: DepsMut,
-    job_id: u64,
-    category_id: u8,
-    budget_range: u8,
-    skill_tags: &[u8],
-) -> Result<(), ContractError> {
-    // Update category index
-    let mut category_jobs = JOBS_BY_CATEGORY
-        .may_load(deps.storage, category_id)?
-        .unwrap_or_default();
-    category_jobs.push(job_id);
-    JOBS_BY_CATEGORY.save(deps.storage, category_id, &category_jobs)?;
-
-    // Update budget range index
-    let mut budget_jobs = JOBS_BY_BUDGET_RANGE
-        .may_load(deps.storage, budget_range)?
-        .unwrap_or_default();
-    budget_jobs.push(job_id);
-    JOBS_BY_BUDGET_RANGE.save(deps.storage, budget_range, &budget_jobs)?;
-
-    // Update skill indexes
-    for &skill_id in skill_tags {
-        let mut skill_jobs = JOBS_BY_SKILL
-            .may_load(deps.storage, skill_id)?
-            .unwrap_or_default();
-        skill_jobs.push(job_id);
-        JOBS_BY_SKILL.save(deps.storage, skill_id, &skill_jobs)?;
-    }
-
-    // Add to active jobs index
-    ACTIVE_JOBS.save(deps.storage, job_id, &true)?;
-
-    Ok(())
-}
-
-/// 📊 Calculate proposal score based on content quality and completeness
-fn calculate_proposal_score(
-    cover_letter: &str,
-    estimated_hours: Option<u16>,
-    milestones: Option<&Vec<crate::state::ProposalMilestone>>,
-) -> u8 {
-    let mut score = 50u8; // Base score
-
-    // Cover letter quality (length and content)
-    if cover_letter.len() > 100 {
-        score += 15;
-    } else if cover_letter.len() > 50 {
-        score += 10;
-    }
-
-    // Contains keywords indicating quality
-    let quality_keywords = ["experience", "portfolio", "timeline", "approach", "deliver"];
-    let keyword_count = quality_keywords
-        .iter()
-        .filter(|&&keyword| cover_letter.to_lowercase().contains(keyword))
-        .count();
-    score += (keyword_count * 5).min(15) as u8;
-
-    // Has estimated hours
-    if estimated_hours.is_some() {
-        score += 10;
-    }
-
-    // Has milestones
-    if let Some(milestones) = milestones {
-        if !milestones.is_empty() {
-            score += 10;
-        }
-    }
-
-    score.min(100)
 }
 
 /// Validate user authorization

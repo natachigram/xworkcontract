@@ -150,11 +150,11 @@ pub fn build_jobs_response(
     storage: &dyn cosmwasm_std::Storage,
     start_after: Option<u64>,
     limit: Option<u32>,
-    category: Option<String>,
+    _category: Option<String>,
     status: Option<JobStatus>,
     poster: Option<Addr>,
 ) -> StdResult<JobsResponse> {
-    let jobs = query_jobs_paginated(storage, start_after, limit, category, status, poster)?;
+    let jobs = query_jobs_paginated(storage, start_after, limit, status, poster)?;
     Ok(JobsResponse { jobs })
 }
 

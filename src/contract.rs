@@ -19,8 +19,7 @@ use crate::msg::{
     BountiesResponse, BountyResponse, BountySubmissionResponse, BountySubmissionsResponse,
     ConfigResponse, DisputeResponse, DisputesResponse, EscrowResponse, ExecuteMsg, InstantiateMsg,
     JobResponse, JobsResponse, MilestoneInput, PlatformStatsResponse, ProposalResponse,
-    ProposalsResponse, QueryMsg, RatingsResponse, RewardTierInput, UserStatsResponse,
-    WinnerSelection,
+    ProposalsResponse, QueryMsg, RatingsResponse, UserStatsResponse,
 };
 use crate::security::{
     check_rate_limit, reentrancy_guard, validate_job_duration, validate_text_inputs,
@@ -28,8 +27,8 @@ use crate::security::{
 };
 use crate::state::{
     Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config, Job, JobStatus,
-    Rating, RewardTier, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_COUNTER, BOUNTY_SUBMISSIONS,
-    BOUNTY_SUBMISSIONS_BY_BOUNTY, BOUNTY_SUBMISSION_COUNTER, CONFIG, DISPUTES, ESCROWS, JOBS,
+    Rating, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_SUBMISSIONS,
+    BOUNTY_SUBMISSIONS_BY_BOUNTY, CONFIG, DISPUTES, ESCROWS, JOBS,
     JOB_COUNTER, JOB_PROPOSALS, PROPOSALS, PROPOSAL_COUNTER, RATE_LIMITS, RATINGS,
     USER_BOUNTY_SUBMISSIONS, USER_PROPOSALS, USER_STATS,
 };
@@ -210,7 +209,7 @@ pub fn execute(
             contact_preference,
             agreed_to_terms,
             agreed_to_escrow,
-            estimated_hours,
+            estimated_hours: _,
             off_chain_storage_key,
         } => execute_submit_proposal(
             deps,
@@ -222,7 +221,6 @@ pub fn execute(
             contact_preference,
             agreed_to_terms,
             agreed_to_escrow,
-            estimated_hours,
             milestones,
             portfolio_samples,
             off_chain_storage_key,
@@ -454,7 +452,7 @@ fn execute_post_job(
     skills_required: Vec<String>,
     duration_days: u64,
     documents: Option<Vec<String>>,
-    milestones: Option<Vec<MilestoneInput>>,
+    _milestones: Option<Vec<MilestoneInput>>,
 ) -> Result<Response, ContractError> {
     // Security checks
     reentrancy_guard(deps.branch())?;
@@ -516,7 +514,7 @@ fn execute_post_job(
     )?;
 
     // Map category to ID (simplified mapping for now)
-    let category_id = match category.to_lowercase().as_str() {
+    let _category_id = match category.to_lowercase().as_str() {
         "web development" => 1,
         "mobile development" => 2,
         "design" => 3,
@@ -526,12 +524,12 @@ fn execute_post_job(
     };
 
     // Map skills to tag IDs (simplified)
-    let skill_tags: Vec<u8> = skills_required.iter().enumerate()
+    let _skill_tags: Vec<u8> = skills_required.iter().enumerate()
         .map(|(i, _)| (i % 50) as u8) // Simple hash for now
         .collect();
 
     // Determine budget range
-    let budget_range = if budget < Uint128::from(500u128) { 1 }
+    let _budget_range = if budget < Uint128::from(500u128) { 1 }
         else if budget < Uint128::from(5000u128) { 2 }
         else { 3 };
 
@@ -549,13 +547,6 @@ fn execute_post_job(
         escrow_id: None,
         total_proposals: 0,
         content_hash,
-        category_id,
-        skill_tags,
-        budget_range,
-        experience_level: 2, // Default to mid-level
-        is_remote: true,     // Default to remote
-        has_milestones: milestones.is_some(),
-        urgency_level: 2,    // Default to medium urgency
     };
 
     JOBS.save(deps.storage, job_id, &job)?;
@@ -1034,8 +1025,8 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             status,
             poster,
         )?),
-        QueryMsg::GetAllJobs { limit, category } => {
-            to_json_binary(&query_all_jobs(deps, limit, category)?)
+        QueryMsg::GetAllJobs { limit, category: _ } => {
+            to_json_binary(&query_all_jobs(deps, limit)?)
         }
         QueryMsg::GetUserJobs { user, status } => {
             to_json_binary(&query_user_jobs(deps, user, status)?)
@@ -1080,19 +1071,18 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetBounties {
             start_after,
             limit,
-            category,
+            category: _,
             status,
             poster,
         } => to_json_binary(&query_bounties(
             deps,
             start_after,
             limit,
-            category,
             status,
             poster,
         )?),
-        QueryMsg::GetAllBounties { limit, category } => {
-            to_json_binary(&query_all_bounties(deps, limit, category)?)
+        QueryMsg::GetAllBounties { limit, category: _ } => {
+            to_json_binary(&query_all_bounties(deps, limit)?)
         }
         QueryMsg::GetUserBounties { user, status } => {
             to_json_binary(&query_user_bounties(deps, user, status)?)
@@ -1125,7 +1115,6 @@ fn query_job(deps: Deps, job_id: u64) -> StdResult<JobResponse> {
 fn query_all_jobs(
     deps: Deps,
     limit: Option<u32>,
-    category: Option<String>,
 ) -> StdResult<JobsResponse> {
     let limit = limit.unwrap_or(50).min(100) as usize; // Max 100 jobs for frontend
     let mut jobs = Vec::new();
@@ -1138,23 +1127,6 @@ fn query_all_jobs(
         for (_, job) in job_pairs {
             // Only show open jobs for landing page
             if job.status == JobStatus::Open {
-                // Filter by category if specified
-                if let Some(ref cat) = category {
-                    // Map category name to ID for comparison
-                    let category_id = match cat.to_lowercase().as_str() {
-                        "web development" => 1,
-                        "mobile development" => 2,
-                        "design" => 3,
-                        "writing" => 4,
-                        "marketing" => 5,
-                        _ => 99, // Other
-                    };
-                    
-                    if job.category_id != category_id {
-                        continue;
-                    }
-                }
-
                 jobs.push(job);
 
                 if jobs.len() >= limit {
@@ -1171,7 +1143,7 @@ fn query_jobs(
     deps: Deps,
     start_after: Option<u64>,
     limit: Option<u32>,
-    category: Option<String>,
+    _category: Option<String>,
     status: Option<JobStatus>,
     poster: Option<String>,
 ) -> StdResult<JobsResponse> {
@@ -1185,7 +1157,6 @@ fn query_jobs(
         deps.storage,
         start_after,
         limit,
-        category,
         status,
         poster_addr,
     )?;
@@ -1195,7 +1166,7 @@ fn query_jobs(
 
 fn query_user_jobs(deps: Deps, user: String, status: Option<JobStatus>) -> StdResult<JobsResponse> {
     let user_addr = deps.api.addr_validate(&user)?;
-    let jobs = query_jobs_paginated(deps.storage, None, None, None, status, Some(user_addr))?;
+    let jobs = query_jobs_paginated(deps.storage, None, None, status, Some(user_addr))?;
 
     Ok(JobsResponse { jobs })
 }
@@ -1593,7 +1564,6 @@ fn query_bounties(
     deps: Deps,
     start_after: Option<u64>,
     limit: Option<u32>,
-    category: Option<String>,
     status: Option<BountyStatus>,
     poster: Option<String>,
 ) -> StdResult<BountiesResponse> {
@@ -1606,14 +1576,6 @@ fn query_bounties(
         .map(|item| item.map(|(_, bounty)| bounty))
         .filter(|result| {
             if let Ok(bounty) = result {
-                // Filter by category
-                if let Some(ref cat) = category {
-                    let category_id = crate::helpers::convert_category_to_id(cat);
-                    if bounty.category_id != category_id {
-                        return false;
-                    }
-                }
-
                 // Filter by status
                 if let Some(ref stat) = status {
                     if bounty.status != *stat {
@@ -1643,7 +1605,6 @@ fn query_bounties(
 fn query_all_bounties(
     deps: Deps,
     limit: Option<u32>,
-    category: Option<String>,
 ) -> StdResult<BountiesResponse> {
     let limit = limit.unwrap_or(50).min(100) as usize;
 
@@ -1656,14 +1617,6 @@ fn query_all_bounties(
                 // Only show open bounties
                 if bounty.status != BountyStatus::Open {
                     return false;
-                }
-
-                // Filter by category
-                if let Some(ref cat) = category {
-                    let category_id = crate::helpers::convert_category_to_id(cat);
-                    if bounty.category_id != category_id {
-                        return false;
-                    }
                 }
 
                 true

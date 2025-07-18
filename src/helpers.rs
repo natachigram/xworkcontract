@@ -84,7 +84,6 @@ pub fn query_jobs_paginated(
     storage: &dyn Storage,
     start_after: Option<u64>,
     limit: Option<u32>,
-    category: Option<String>,
     status: Option<JobStatus>,
     poster: Option<Addr>,
 ) -> StdResult<Vec<Job>> {
@@ -97,22 +96,11 @@ pub fn query_jobs_paginated(
         .filter_map(|item| {
             match item {
                 Ok((_, job)) => {
-                    // Map category string to ID for comparison  
-                    let category_match = category.as_ref().map_or(true, |c| {
-                        let category_id = match c.to_lowercase().as_str() {
-                            "web development" => 1,
-                            "mobile development" => 2,
-                            "design" => 3,
-                            "writing" => 4,
-                            "marketing" => 5,
-                            _ => 99, // Other
-                        };
-                        job.category_id == category_id
-                    });
+                    // ULTRA-MINIMAL: Category filtering removed, handled by backend
                     let status_match = status.as_ref().map_or(true, |s| &job.status == s);
                     let poster_match = poster.as_ref().map_or(true, |p| job.poster == *p);
                     
-                    if category_match && status_match && poster_match {
+                    if status_match && poster_match {
                         Some(Ok(job))
                     } else {
                         None
@@ -253,70 +241,9 @@ pub fn is_expired(deadline: Timestamp, current: Timestamp) -> bool {
     current > deadline
 }
 
-// Category and skill conversion helpers for bounty optimization
-pub fn convert_category_to_id(category: &str) -> u8 {
-    match category.to_lowercase().as_str() {
-        "web development" | "web" => 1,
-        "mobile development" | "mobile" => 2,
-        "design" | "ui/ux" => 3,
-        "writing" | "content writing" => 4,
-        "marketing" | "digital marketing" => 5,
-        "blockchain" | "smart contracts" => 6,
-        "data science" | "machine learning" => 7,
-        "devops" | "infrastructure" => 8,
-        "testing" | "qa" => 9,
-        "video editing" | "video production" => 10,
-        _ => 99, // Other
-    }
-}
-
-pub fn convert_skill_to_id(skill: &str) -> u8 {
-    match skill.to_lowercase().as_str() {
-        "rust" => 1,
-        "javascript" | "js" => 2,
-        "typescript" | "ts" => 3,
-        "python" => 4,
-        "react" => 5,
-        "vue" => 6,
-        "angular" => 7,
-        "nodejs" | "node" => 8,
-        "solidity" => 9,
-        "cosmwasm" => 10,
-        "html" => 11,
-        "css" => 12,
-        "figma" => 13,
-        "photoshop" => 14,
-        "illustrator" => 15,
-        "after effects" => 16,
-        "premiere pro" => 17,
-        "copywriting" => 18,
-        "seo" => 19,
-        "social media" => 20,
-        "aws" => 21,
-        "docker" => 22,
-        "kubernetes" => 23,
-        "postgresql" => 24,
-        "mongodb" => 25,
-        _ => 99, // Other
-    }
-}
-
-pub fn convert_skills_to_ids(skills: &[String]) -> Vec<u8> {
-    skills.iter()
-        .map(|skill| convert_skill_to_id(skill))
-        .collect()
-}
-
-pub fn calculate_reward_range(reward: Uint128) -> u8 {
-    let amount = reward.u128();
-    if amount < 100_000_000 { // < $100 (assuming 6 decimal places)
-        1 // Low
-    } else if amount < 1_000_000_000 { // < $1000
-        2 // Medium
-    } else {
-        3 // High
-    }
-}
+// 🎯 REMOVED: All search-related helper functions
+// Category and skill conversion functions removed - 
+// Backend will handle all categorization and skill matching
 
 pub fn calculate_difficulty_from_skills(skills: &[String]) -> u8 {
     let advanced_skills = ["rust", "solidity", "cosmwasm", "machine learning", "blockchain", "kubernetes"];

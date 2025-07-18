@@ -26,28 +26,19 @@ pub struct Job {
     pub id: u64,
     pub poster: Addr,
 
-    // 🔥 ESSENTIAL DATA (KEPT ON-CHAIN)
-    pub budget: Uint128,
-    pub duration_days: u64,
-    pub status: JobStatus,
-    pub assigned_freelancer: Option<Addr>,
-    pub created_at: Timestamp,
-    pub updated_at: Timestamp,
-    pub deadline: Timestamp,
-    pub escrow_id: Option<String>,
-    pub total_proposals: u64,
+    // 🔥 ESSENTIAL BUSINESS LOGIC DATA ONLY (KEPT ON-CHAIN)
+    pub budget: Uint128,                   // Contract needs for escrow/payments
+    pub duration_days: u64,                // Contract needs for deadline calculation
+    pub status: JobStatus,                 // Contract needs for state management
+    pub assigned_freelancer: Option<Addr>, // Contract needs for payments
+    pub created_at: Timestamp,             // Contract needs for time-based logic
+    pub updated_at: Timestamp,             // Contract needs for modification tracking
+    pub deadline: Timestamp,               // Contract needs for deadline enforcement
+    pub escrow_id: Option<String>,         // Contract needs for escrow management
+    pub total_proposals: u64,              // Contract needs for proposal counting
 
-    // 🌐 CONTENT HASH (POINTS TO OFF-CHAIN DATA)
-    pub content_hash: ContentHash, // Contains: title, description, company, location, category, skills, documents
-
-    // 📊 SEARCHABLE METADATA (MINIMAL ON-CHAIN)
-    pub category_id: u8,      // Numeric category for efficient filtering
-    pub skill_tags: Vec<u8>,  // Skill IDs for efficient matching
-    pub budget_range: u8,     // 1=Low(<$500), 2=Mid($500-5k), 3=High(>$5k)
-    pub experience_level: u8, // 1=Entry, 2=Mid, 3=Senior
-    pub is_remote: bool,
-    pub has_milestones: bool,
-    pub urgency_level: u8, // 1=Low, 2=Medium, 3=High, 4=Urgent
+    // 🌐 ALL CONTENT OFF-CHAIN (via content_hash)
+    pub content_hash: ContentHash, // title, description, company, location, category, skills, documents, requirements, etc.
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -67,21 +58,15 @@ pub struct Proposal {
     pub freelancer: Addr,
     pub job_id: u64,
 
-    // 🔥 ESSENTIAL DATA (KEPT ON-CHAIN)
-    pub delivery_time_days: u64,
-    pub contact_preference: ContactPreference,
-    pub agreed_to_terms: bool,
-    pub agreed_to_escrow: bool,
-    pub submitted_at: Timestamp,
+    // 🔥 ESSENTIAL BUSINESS LOGIC DATA ONLY (KEPT ON-CHAIN)
+    pub delivery_time_days: u64, // Contract needs for deadline calculation
+    pub contact_preference: ContactPreference, // Contract needs for contact management
+    pub agreed_to_terms: bool,   // Contract needs for agreement validation
+    pub agreed_to_escrow: bool,  // Contract needs for escrow validation
+    pub submitted_at: Timestamp, // Contract needs for time-based logic
 
-    // 🌐 CONTENT HASH (POINTS TO OFF-CHAIN DATA)
-    pub content_hash: ContentHash, // Contains: cover_letter, milestones, portfolio
-
-    // 📊 PROPOSAL METADATA (MINIMAL ON-CHAIN)
-    pub proposal_score: u8, // Auto-calculated score 1-100
-    pub has_milestones: bool,
-    pub milestone_count: u8,
-    pub estimated_hours: u16, // If provided by freelancer
+    // 🌐 ALL CONTENT OFF-CHAIN (via content_hash)
+    pub content_hash: ContentHash, // cover_letter, milestones, portfolio, proposal_score, estimated_hours, etc.
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -272,22 +257,21 @@ pub struct Bounty {
     pub id: u64,
     pub poster: Addr,
 
-    // 🔥 ESSENTIAL BUSINESS LOGIC DATA (KEPT ON-CHAIN)
-    pub total_reward: Uint128,           // Contract needs for escrow/payments
-    pub submission_deadline: Timestamp,   // Contract needs for deadline enforcement
-    pub review_period_days: u64,         // Contract needs for review period enforcement
-    pub max_winners: u64,                // Contract needs for winner selection logic
+    // 🔥 ESSENTIAL BUSINESS LOGIC DATA ONLY (KEPT ON-CHAIN)
+    pub total_reward: Uint128, // Contract needs for escrow/payments
+    pub submission_deadline: Timestamp, // Contract needs for deadline enforcement
+    pub review_period_days: u64, // Contract needs for review period enforcement
+    pub max_winners: u64,      // Contract needs for winner selection logic
     pub reward_distribution: Vec<RewardTier>, // Contract needs for payment distribution
-    pub status: BountyStatus,            // Contract needs for state management
-    pub created_at: Timestamp,           // Contract needs for time-based logic
-    pub updated_at: Timestamp,           // Contract needs for modification tracking
-    pub total_submissions: u64,          // Contract needs for submission counting
-    pub selected_winners: Vec<u64>,      // Contract needs for winner tracking
-    pub escrow_id: Option<String>,       // Contract needs for escrow management
+    pub status: BountyStatus,  // Contract needs for state management
+    pub created_at: Timestamp, // Contract needs for time-based logic
+    pub updated_at: Timestamp, // Contract needs for modification tracking
+    pub total_submissions: u64, // Contract needs for submission counting
+    pub selected_winners: Vec<u64>, // Contract needs for winner tracking
+    pub escrow_id: Option<String>, // Contract needs for escrow management
 
     // 🌐 ALL CONTENT OFF-CHAIN (via content_hash)
-    pub content_hash: ContentHash,       // title, description, requirements, documents, skills, categories
-}
+    pub content_hash: ContentHash, // title, description, requirements, documents, skills, category, etc.
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -303,19 +287,14 @@ pub struct BountySubmission {
     pub bounty_id: u64,
     pub submitter: Addr,
 
-    // 🔥 ESSENTIAL DATA (KEPT ON-CHAIN)
-    pub submitted_at: Timestamp,
-    pub status: BountySubmissionStatus,
-    pub score: Option<u8>,            // 1-10 score for ranking submissions
-    pub winner_position: Option<u64>, // If winner, what position (1st, 2nd, etc.)
+    // 🔥 ESSENTIAL BUSINESS LOGIC DATA ONLY (KEPT ON-CHAIN)
+    pub submitted_at: Timestamp, // Contract needs for time-based logic
+    pub status: BountySubmissionStatus, // Contract needs for state management
+    pub score: Option<u8>,       // Contract needs for ranking submissions
+    pub winner_position: Option<u64>, // Contract needs for winner tracking
 
-    // 🌐 CONTENT HASH (POINTS TO OFF-CHAIN DATA)
-    pub content_hash: ContentHash, // Contains: title, description, deliverables, review_notes
-
-    // 📊 SUBMISSION METADATA (MINIMAL ON-CHAIN)
-    pub deliverable_count: u8,           // Number of deliverables provided
-    pub submission_type: u8,             // 1=Document, 2=Code, 3=Design, 4=Video, 5=Other
-    pub estimated_completion_hours: u16, // Time spent on bounty
+    // 🌐 ALL CONTENT OFF-CHAIN (via content_hash)
+    pub content_hash: ContentHash, // title, description, deliverables, review_notes, submission_type, etc.
 }
 
 // Enhanced storage keys with security features
@@ -332,26 +311,6 @@ pub const ESCROWS: Map<&str, EscrowState> = Map::new("escrows");
 pub const CONTENT_HASHES: Map<&str, ContentHash> = Map::new("content_hashes"); // hash -> metadata
 pub const HASH_TO_ENTITY: Map<&str, String> = Map::new("hash_to_entity"); // hash -> entity_id
 pub const ENTITY_TO_HASH: Map<&str, String> = Map::new("entity_to_hash"); // entity_id -> current_hash
-
-// 📚 LOOKUP TABLES FOR EFFICIENT QUERIES
-pub const CATEGORIES: Map<u8, String> = Map::new("categories"); // id -> category_name
-pub const SKILLS: Map<u8, String> = Map::new("skills"); // id -> skill_name
-pub const CATEGORY_COUNTER: Item<u8> = Item::new("category_counter");
-pub const SKILL_COUNTER: Item<u8> = Item::new("skill_counter");
-
-// 🔍 SEARCH INDEXES (FOR FAST FILTERING)
-pub const JOBS_BY_CATEGORY: Map<u8, Vec<u64>> = Map::new("jobs_by_category");
-pub const JOBS_BY_BUDGET_RANGE: Map<u8, Vec<u64>> = Map::new("jobs_by_budget_range");
-pub const JOBS_BY_SKILL: Map<u8, Vec<u64>> = Map::new("jobs_by_skill");
-pub const ACTIVE_JOBS: Map<u64, bool> = Map::new("active_jobs"); // For quick active job lookup
-
-// 🎯 BOUNTY SEARCH INDEXES (FOR EFFICIENT BOUNTY FILTERING)
-pub const BOUNTIES_BY_CATEGORY: Map<u8, Vec<u64>> = Map::new("bounties_by_category");
-pub const BOUNTIES_BY_REWARD_RANGE: Map<u8, Vec<u64>> = Map::new("bounties_by_reward_range");
-pub const BOUNTIES_BY_SKILL: Map<u8, Vec<u64>> = Map::new("bounties_by_skill");
-pub const BOUNTIES_BY_DIFFICULTY: Map<u8, Vec<u64>> = Map::new("bounties_by_difficulty");
-pub const ACTIVE_BOUNTIES: Map<u64, bool> = Map::new("active_bounties"); // For quick active bounty lookup
-pub const FEATURED_BOUNTIES: Map<u64, bool> = Map::new("featured_bounties"); // For featured bounty display
 
 // Bounty storage
 pub const BOUNTIES: Map<u64, Bounty> = Map::new("bounties");

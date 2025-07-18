@@ -2,8 +2,6 @@ use crate::contract_helpers::*;
 use crate::error::ContractError;
 use crate::helpers::{
     ensure_not_paused, get_future_timestamp, validate_budget, validate_duration,
-    convert_category_to_id, convert_skills_to_ids, calculate_reward_range, 
-    calculate_difficulty_from_skills, estimate_hours_from_reward_and_difficulty,
 };
 use crate::hash_utils::{
     create_content_hash, create_bounty_content_bundle, create_bounty_submission_content_bundle,
@@ -15,8 +13,7 @@ use crate::state::{
     BountySubmissionStatus, BountyStatus, Bounty, BountySubmission, RewardTier,
     BOUNTIES, BOUNTY_SUBMISSIONS, BOUNTY_SUBMISSIONS_BY_BOUNTY, ESCROWS, EscrowState,
     DisputeStatus, CONFIG, NEXT_BOUNTY_ID, NEXT_BOUNTY_SUBMISSION_ID, CONTENT_HASHES,
-    HASH_TO_ENTITY, ENTITY_TO_HASH, BOUNTIES_BY_CATEGORY, BOUNTIES_BY_REWARD_RANGE,
-    BOUNTIES_BY_SKILL, BOUNTIES_BY_DIFFICULTY, ACTIVE_BOUNTIES, FEATURED_BOUNTIES,
+    HASH_TO_ENTITY, ENTITY_TO_HASH,
 };
 use crate::hash_utils::ContentHash;
 use crate::{apply_security_checks, build_success_response, validate_content_inputs};
@@ -100,13 +97,6 @@ pub fn execute_create_bounty(
     HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
     ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str)?;
 
-    // 📊 Calculate metadata for efficient searching
-    let category_id = convert_category_to_id(&category);
-    let skill_tags = convert_skills_to_ids(&skills_required);
-    let reward_range = calculate_reward_range(total_reward);
-    let difficulty_level = calculate_difficulty_from_skills(&skills_required);
-    let estimated_hours = estimate_hours_from_reward_and_difficulty(total_reward, difficulty_level);
-
     // Convert reward distribution
     let mut reward_tiers = Vec::new();
     for (i, tier_input) in reward_distribution.iter().enumerate() {
@@ -134,20 +124,9 @@ pub fn execute_create_bounty(
         
         // 🌐 Off-chain content reference
         content_hash,
-        
-        // 📊 On-chain metadata for efficient searching
-        category_id,
-        skill_tags,
-        reward_range,
-        difficulty_level,
-        estimated_hours,
-        is_featured: false,
     };
 
     BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    // 🔍 Update search indexes for efficient querying
-    update_bounty_search_indexes(deps.storage, &bounty)?;
 
     // Create escrow using EscrowState schema
     let escrow_id = format!("bounty_{}", bounty_id);
@@ -264,11 +243,6 @@ pub fn execute_edit_bounty(
 
     bounty.updated_at = env.block.time;
     BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    // 🔍 Update search indexes if metadata changed
-    if content_needs_update {
-        update_bounty_search_indexes(deps.storage, &bounty)?;
-    }
 
     Ok(build_success_response!(
         "edit_bounty",
@@ -408,8 +382,8 @@ pub fn execute_submit_to_bounty(
     ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str)?;
 
     // 📊 Calculate submission metadata
-    let deliverable_count = deliverables.len() as u8;
-    let submission_type = if deliverables.is_empty() {
+    let _deliverable_count = deliverables.len() as u8;
+    let _submission_type = if deliverables.is_empty() {
         5 // Other
     } else {
         determine_submission_type(&deliverables[0])
@@ -427,11 +401,6 @@ pub fn execute_submit_to_bounty(
         
         // 🌐 Off-chain content reference
         content_hash,
-        
-        // 📊 On-chain metadata for efficient searching
-        deliverable_count,
-        submission_type,
-        estimated_completion_hours: 0, // Default, can be updated later
     };
 
     BOUNTY_SUBMISSIONS.save(deps.storage, submission_id, &submission)?;
@@ -839,7 +808,7 @@ pub fn query_bounties(
     deps: Deps,
     start_after: Option<u64>,
     limit: Option<u32>,
-    category: Option<String>,
+    _category: Option<String>,
     status: Option<BountyStatus>,
     creator: Option<String>,
 ) -> StdResult<BountiesResponse> {
@@ -867,13 +836,6 @@ pub fn query_bounties(
 
             // Apply filters
             let mut include = true;
-
-            if let Some(ref filter_category) = category {
-                let category_id = convert_category_to_id(filter_category);
-                if bounty.category_id != category_id {
-                    include = false;
-                }
-            }
 
             if let Some(ref filter_status) = status {
                 if &bounty.status != filter_status {
@@ -963,51 +925,6 @@ pub fn query_user_bounty_submissions(
         .collect();
 
     Ok(BountySubmissionsResponse { submissions })
-}
-
-/// Helper function to update bounty search indexes
-fn update_bounty_search_indexes(storage: &mut dyn cosmwasm_std::Storage, bounty: &Bounty) -> Result<(), ContractError> {
-    // Update category index
-    let mut category_bounties = BOUNTIES_BY_CATEGORY
-        .may_load(storage, bounty.category_id)?
-        .unwrap_or_default();
-    category_bounties.push(bounty.id);
-    BOUNTIES_BY_CATEGORY.save(storage, bounty.category_id, &category_bounties)?;
-
-    // Update reward range index
-    let mut reward_range_bounties = BOUNTIES_BY_REWARD_RANGE
-        .may_load(storage, bounty.reward_range)?
-        .unwrap_or_default();
-    reward_range_bounties.push(bounty.id);
-    BOUNTIES_BY_REWARD_RANGE.save(storage, bounty.reward_range, &reward_range_bounties)?;
-
-    // Update skill indexes
-    for &skill_id in &bounty.skill_tags {
-        let mut skill_bounties = BOUNTIES_BY_SKILL
-            .may_load(storage, skill_id)?
-            .unwrap_or_default();
-        skill_bounties.push(bounty.id);
-        BOUNTIES_BY_SKILL.save(storage, skill_id, &skill_bounties)?;
-    }
-
-    // Update difficulty index
-    let mut difficulty_bounties = BOUNTIES_BY_DIFFICULTY
-        .may_load(storage, bounty.difficulty_level)?
-        .unwrap_or_default();
-    difficulty_bounties.push(bounty.id);
-    BOUNTIES_BY_DIFFICULTY.save(storage, bounty.difficulty_level, &difficulty_bounties)?;
-
-    // Update active bounties index
-    if bounty.status == BountyStatus::Open {
-        ACTIVE_BOUNTIES.save(storage, bounty.id, &true)?;
-    }
-
-    // Update featured bounties index
-    if bounty.is_featured {
-        FEATURED_BOUNTIES.save(storage, bounty.id, &true)?;
-    }
-
-    Ok(())
 }
 
 /// Helper function to determine submission type from URL

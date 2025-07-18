@@ -1,25 +1,7 @@
 use crate::hash_utils::ContentHash;
-use crate::helpers::{convert_category_to_id, convert_skill_to_id};
 use crate::msg::*;
 use crate::state::*;
 use cosmwasm_std::{Deps, Order, StdResult, Uint128};
-
-/// Convert category ID back to category name
-fn convert_category_id_to_name(category_id: u8) -> String {
-    match category_id {
-        1 => "Web Development".to_string(),
-        2 => "Mobile Development".to_string(),
-        3 => "Design".to_string(),
-        4 => "Writing".to_string(),
-        5 => "Marketing".to_string(),
-        6 => "Blockchain".to_string(),
-        7 => "Data Science".to_string(),
-        8 => "DevOps".to_string(),
-        9 => "Testing".to_string(),
-        10 => "Video Production".to_string(),
-        _ => "Other".to_string(),
-    }
-}
 
 /// Generic pagination helper for any collection
 pub struct PaginationParams {
@@ -187,15 +169,10 @@ pub fn query_platform_stats(deps: Deps) -> StdResult<PlatformStatsResponse> {
 pub fn query_jobs_advanced(
     deps: Deps,
     params: PaginationParams,
-    category: Option<String>,
     status: Option<JobStatus>,
     poster: Option<String>,
     min_budget: Option<Uint128>,
     max_budget: Option<Uint128>,
-    skills_required: Option<Vec<String>>,
-    job_type: Option<String>,
-    remote_allowed: Option<bool>,
-    experience_level: Option<String>,
 ) -> StdResult<JobsResponse> {
     let limit = params.limit.unwrap_or(50) as usize;
     let mut jobs = Vec::new();
@@ -224,22 +201,7 @@ pub fn query_jobs_advanced(
             // Apply all filters
             let mut include = true;
 
-            if let Some(ref filter_category) = category {
-                // Map category string to ID for comparison
-                let category_id = match filter_category.to_lowercase().as_str() {
-                    "web development" => 1,
-                    "mobile development" => 2,
-                    "design" => 3,
-                    "writing" => 4,
-                    "marketing" => 5,
-                    _ => 99, // Other
-                };
-
-                if job.category_id != category_id {
-                    include = false;
-                }
-            }
-
+            // ULTRA-MINIMAL: Category filtering removed, handled by backend
             if let Some(ref filter_status) = status {
                 if &job.status != filter_status {
                     include = false;
@@ -264,36 +226,11 @@ pub fn query_jobs_advanced(
                 }
             }
 
-            if let Some(ref _filter_skills) = skills_required {
-                // In hybrid architecture, skill matching would require off-chain content lookup
-                // For now, skip skill filtering to avoid compilation errors
-                // TODO: Implement skill matching via off-chain content hash resolution
-            }
+            // ULTRA-MINIMAL: Skill filtering removed - handled by backend
+            // All content-based filtering now handled off-chain
 
-            if let Some(ref _filter_job_type) = job_type {
-                // Job type filtering disabled in hybrid architecture
-                // TODO: Implement job type via off-chain content or additional on-chain fields
-            }
-
-            if let Some(filter_remote) = remote_allowed {
-                if job.is_remote != filter_remote {
-                    include = false;
-                }
-            }
-
-            if let Some(ref filter_exp_level) = experience_level {
-                // Convert string experience level to u8 for comparison
-                let exp_level_id = match filter_exp_level.to_lowercase().as_str() {
-                    "entry" => 1,
-                    "mid" => 2,
-                    "senior" => 3,
-                    _ => 2, // Default to mid
-                };
-
-                if job.experience_level != exp_level_id {
-                    include = false;
-                }
-            }
+            // ULTRA-MINIMAL: Job type, remote, and experience level filtering removed
+            // These filters are now handled by the backend for better performance
 
             if include {
                 jobs.push(job);
@@ -311,12 +248,10 @@ pub fn query_jobs_advanced(
 pub fn query_bounties_advanced(
     deps: Deps,
     params: PaginationParams,
-    category: Option<String>,
     status: Option<BountyStatus>,
     creator: Option<String>,
     min_reward: Option<Uint128>,
     max_reward: Option<Uint128>,
-    skills_required: Option<Vec<String>>,
 ) -> StdResult<BountiesResponse> {
     let limit = params.limit.unwrap_or(50) as usize;
     let mut bounties = Vec::new();
@@ -345,13 +280,7 @@ pub fn query_bounties_advanced(
             // Apply all filters
             let mut include = true;
 
-            if let Some(ref filter_category) = category {
-                let category_id = convert_category_to_id(filter_category);
-                if bounty.category_id != category_id {
-                    include = false;
-                }
-            }
-
+            // ULTRA-MINIMAL: Category filtering removed, handled by backend
             if let Some(ref filter_status) = status {
                 if &bounty.status != filter_status {
                     include = false;
@@ -376,16 +305,8 @@ pub fn query_bounties_advanced(
                 }
             }
 
-            if let Some(ref filter_skills) = skills_required {
-                let has_skill = filter_skills.iter().any(|skill| {
-                    let skill_id = convert_skill_to_id(skill);
-                    bounty.skill_tags.contains(&skill_id)
-                });
-                if !has_skill {
-                    include = false;
-                }
-            }
-
+            // ULTRA-MINIMAL: Skill filtering removed, handled by backend
+            
             if include {
                 bounties.push(bounty);
                 if bounties.len() >= limit {
@@ -522,16 +443,8 @@ pub fn query_categories(deps: Deps) -> StdResult<CategoriesResponse> {
     if let Ok(job_pairs) = job_items {
         for (_, job) in job_pairs {
             if job.status == JobStatus::Open {
-                // Map category_id back to category name
-                let category_name = match job.category_id {
-                    1 => "Web Development".to_string(),
-                    2 => "Mobile Development".to_string(),
-                    3 => "Design".to_string(),
-                    4 => "Writing".to_string(),
-                    5 => "Marketing".to_string(),
-                    _ => "Other".to_string(),
-                };
-
+                // ULTRA-MINIMAL: Category info moved to off-chain, use default
+                let category_name = "General".to_string();
                 *job_categories.entry(category_name).or_insert(0) += 1;
             }
         }
@@ -542,14 +455,15 @@ pub fn query_categories(deps: Deps) -> StdResult<CategoriesResponse> {
         .range(deps.storage, None, None, Order::Ascending)
         .collect();
 
-        if let Ok(bounty_pairs) = bounty_items {
-            for (_, bounty) in bounty_pairs {
-                if bounty.status == BountyStatus::Open {
-                    let category_name = convert_category_id_to_name(bounty.category_id);
-                    *bounty_categories.entry(category_name).or_insert(0) += 1;
-                }
+    if let Ok(bounty_pairs) = bounty_items {
+        for (_, bounty) in bounty_pairs {
+            if bounty.status == BountyStatus::Open {
+                // ULTRA-MINIMAL: Category info moved to off-chain, use default
+                let category_name = "General".to_string();
+                *bounty_categories.entry(category_name).or_insert(0) += 1;
             }
-        }    // Convert to sorted vectors
+        }
+    }    // Convert to sorted vectors
     let mut job_cats: Vec<_> = job_categories.into_iter().collect();
     job_cats.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by count descending
 
@@ -581,13 +495,14 @@ pub fn job_to_hash_aware_response(job: &Job, off_chain_key: String) -> HashAware
         total_proposals: job.total_proposals,
         content_hash: job.content_hash.clone(),
         off_chain_data_key: off_chain_key,
-        category_id: job.category_id,
-        skill_tags: job.skill_tags.clone(),
-        budget_range: job.budget_range,
-        experience_level: job.experience_level,
-        is_remote: job.is_remote,
-        has_milestones: job.has_milestones,
-        urgency_level: job.urgency_level,
+        // ULTRA-MINIMAL: These fields moved to off-chain content
+        category_id: 0,          // Backend handles category filtering
+        skill_tags: vec![],      // Backend handles skill filtering
+        budget_range: 0,         // Backend handles budget filtering
+        experience_level: 0,     // Backend handles experience filtering
+        is_remote: false,        // Backend handles remote filtering
+        has_milestones: false,   // Backend handles milestone filtering
+        urgency_level: 0,        // Backend handles urgency filtering
     }
 }
 
@@ -607,10 +522,11 @@ pub fn proposal_to_hash_aware_response(
         submitted_at: proposal.submitted_at,
         content_hash: proposal.content_hash.clone(),
         off_chain_data_key: off_chain_key,
-        proposal_score: proposal.proposal_score,
-        has_milestones: proposal.has_milestones,
-        milestone_count: proposal.milestone_count,
-        estimated_hours: proposal.estimated_hours,
+        // ULTRA-MINIMAL: These fields moved to off-chain content
+        proposal_score: 0,       // Backend handles proposal scoring
+        has_milestones: false,   // Backend handles milestone info
+        milestone_count: 0,      // Backend handles milestone count
+        estimated_hours: 0,      // Backend handles time estimation
     }
 }
 
@@ -637,62 +553,29 @@ pub fn user_profile_to_hash_aware_response(
 /// 🔍 Query hash-aware jobs with efficient filtering
 pub fn query_hash_aware_jobs(
     deps: Deps,
-    category_id: Option<u8>,
-    budget_range: Option<u8>,
-    skill_tags: Option<Vec<u8>>,
-    is_remote: Option<bool>,
-    experience_level: Option<u8>,
     limit: Option<u32>,
 ) -> StdResult<Vec<HashAwareJobResponse>> {
     let limit = limit.unwrap_or(50).min(100) as usize;
     let mut results = Vec::new();
 
-    // Use search indexes for efficient filtering
-    let candidate_jobs = if let Some(cat_id) = category_id {
-        JOBS_BY_CATEGORY
-            .may_load(deps.storage, cat_id)?
-            .unwrap_or_default()
-    } else if let Some(budget_r) = budget_range {
-        JOBS_BY_BUDGET_RANGE
-            .may_load(deps.storage, budget_r)?
-            .unwrap_or_default()
-    } else if let Some(skills) = skill_tags {
-        if let Some(first_skill) = skills.first() {
-            JOBS_BY_SKILL
-                .may_load(deps.storage, *first_skill)?
-                .unwrap_or_default()
-        } else {
-            vec![]
-        }
-    } else {
-        // Fall back to iterating all active jobs
-        ACTIVE_JOBS
-            .range(deps.storage, None, None, Order::Descending)
-            .map(|item| item.map(|(job_id, _)| job_id))
-            .collect::<StdResult<Vec<_>>>()?
-    };
+    // ULTRA-MINIMAL: Since search indexes are removed, iterate through all jobs
+    // Backend should handle advanced filtering for better performance
+    for job_result in JOBS.range(deps.storage, None, None, Order::Descending) {
+        if let Ok((job_id, job)) = job_result {
+            // Only include open jobs
+            if job.status == JobStatus::Open {
+                // Get off-chain key
+                let entity_key = format!("job_{}", job_id);
+                let off_chain_key = ENTITY_TO_HASH
+                    .load(deps.storage, &entity_key)
+                    .unwrap_or_default();
 
-    for job_id in candidate_jobs.iter().take(limit) {
-        if let Ok(job) = JOBS.load(deps.storage, *job_id) {
-            // Apply additional filters
-            if let Some(remote) = is_remote {
-                if job.is_remote != remote {
-                    continue;
+                results.push(job_to_hash_aware_response(&job, off_chain_key));
+
+                if results.len() >= limit {
+                    break;
                 }
             }
-            if let Some(exp_level) = experience_level {
-                if job.experience_level != exp_level {
-                    continue;
-                }
-            }
-
-            // Get off-chain key
-            let entity_key = format!("job_{}", job_id);
-            let off_chain_key = ENTITY_TO_HASH
-                .load(deps.storage, &entity_key)
-                .unwrap_or_default();
-
-            results.push(job_to_hash_aware_response(&job, off_chain_key));
         }
     }
 
