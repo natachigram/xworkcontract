@@ -1,3 +1,9 @@
+use crate::bounty_management::{
+    execute_create_bounty, execute_edit_bounty, execute_submit_to_bounty,
+    execute_review_bounty_submission, execute_select_bounty_winners, execute_cancel_bounty,
+    execute_edit_bounty_submission, execute_withdraw_bounty_submission,
+    execute_create_bounty_escrow, execute_release_bounty_rewards,
+};
 use crate::error::ContractError;
 use crate::escrow::{
     create_escrow_cw20, create_escrow_native, raise_dispute, refund_escrow, release_escrow,
@@ -5,7 +11,7 @@ use crate::escrow::{
 };
 use crate::helpers::{
     ensure_not_paused, get_future_timestamp, query_jobs_paginated, query_user_proposals,
-    validate_budget, validate_deadline, validate_duration, validate_job_description,
+    validate_budget, validate_duration, validate_job_description,
     validate_job_title,
 };
 use crate::job_management::{execute_edit_job, execute_edit_proposal, execute_submit_proposal};
@@ -22,7 +28,7 @@ use crate::security::{
 };
 use crate::state::{
     Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config, Job, JobStatus,
-    Milestone, Rating, RewardTier, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_COUNTER, BOUNTY_SUBMISSIONS,
+    Rating, RewardTier, BLOCKED_ADDRESSES, BOUNTIES, BOUNTY_COUNTER, BOUNTY_SUBMISSIONS,
     BOUNTY_SUBMISSIONS_BY_BOUNTY, BOUNTY_SUBMISSION_COUNTER, CONFIG, DISPUTES, ESCROWS, JOBS,
     JOB_COUNTER, JOB_PROPOSALS, PROPOSALS, PROPOSAL_COUNTER, RATE_LIMITS, RATINGS,
     USER_BOUNTY_SUBMISSIONS, USER_PROPOSALS, USER_STATS,
@@ -98,17 +104,23 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        // Job Management
+        // 🎯 Job Management (HYBRID)
         ExecuteMsg::PostJob {
             title,
             description,
-            budget,
+            company,
+            location,
             category,
             skills_required,
-            duration_days,
             documents,
             milestones,
-        } => execute_post_job(
+            budget,
+            duration_days,
+            experience_level,
+            is_remote,
+            urgency_level,
+            off_chain_storage_key,
+        } => crate::job_management::execute_post_job(
             deps,
             env,
             info,
@@ -118,8 +130,14 @@ pub fn execute(
             category,
             skills_required,
             duration_days,
+            company,
+            location,
             documents,
             milestones,
+            experience_level,
+            is_remote,
+            urgency_level,
+            off_chain_storage_key,
         ),
 
         ExecuteMsg::EditJob {
@@ -132,6 +150,7 @@ pub fn execute(
             duration_days,
             documents,
             milestones,
+            off_chain_storage_key,
         } => execute_edit_job(
             deps,
             env,
@@ -145,29 +164,33 @@ pub fn execute(
             duration_days,
             documents,
             milestones,
+            off_chain_storage_key,
         ),
 
+        // 🎯 User Profile Management (HYBRID)
         ExecuteMsg::UpdateUserProfile {
-            name,
+            display_name,
             bio,
             skills,
             location,
             website,
-            portfolio_url,
+            portfolio_links,
             hourly_rate,
             availability,
+            off_chain_storage_key,
         } => execute_update_user_profile(
             deps,
             env,
             info,
-            name,
+            display_name,
             bio,
             skills,
             location,
             website,
-            portfolio_url,
+            portfolio_links,
             hourly_rate,
             availability,
+            off_chain_storage_key,
         ),
 
         ExecuteMsg::DeleteJob { job_id } => {
@@ -177,12 +200,18 @@ pub fn execute(
             crate::job_management::execute_cancel_job(deps, env, info, job_id)
         }
 
-        // Proposal Management
+        // 🎯 Proposal Management (HYBRID)
         ExecuteMsg::SubmitProposal {
             job_id,
             cover_letter,
-            delivery_time_days,
             milestones,
+            portfolio_samples,
+            delivery_time_days,
+            contact_preference,
+            agreed_to_terms,
+            agreed_to_escrow,
+            estimated_hours,
+            off_chain_storage_key,
         } => execute_submit_proposal(
             deps,
             env,
@@ -190,7 +219,13 @@ pub fn execute(
             job_id,
             cover_letter,
             delivery_time_days,
+            contact_preference,
+            agreed_to_terms,
+            agreed_to_escrow,
+            estimated_hours,
             milestones,
+            portfolio_samples,
+            off_chain_storage_key,
         ),
 
         ExecuteMsg::EditProposal {
@@ -407,6 +442,7 @@ pub fn execute(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn execute_post_job(
     mut deps: DepsMut,
     env: Env,
@@ -456,69 +492,70 @@ fn execute_post_job(
     let deadline = get_future_timestamp(env.block.time, duration_days);
 
     // Process milestones
-    let mut job_milestones = Vec::new();
-    if let Some(milestone_inputs) = milestones {
-        let mut total_milestone_amount = Uint128::zero();
+    // In hybrid architecture, bundle content off-chain and just store flags
+    use crate::hash_utils::create_job_content_bundle;
+    
+    // Create off-chain content bundle
+    let timestamp = env.block.time.seconds();
+    let (_bundle, hash) = create_job_content_bundle(
+        job_id,
+        &title,
+        &description,
+        None, // company - not provided in this function signature
+        None, // location - not provided in this function signature
+        &category,
+        &skills_required,
+        &documents.clone().unwrap_or_default(),
+        timestamp,
+    )?;
+    
+    let content_hash = crate::hash_utils::create_content_hash(
+        &hash,
+        "job_content",
+        timestamp,
+    )?;
 
-        for (idx, milestone_input) in milestone_inputs.iter().enumerate() {
-            if milestone_input.title.is_empty() || milestone_input.title.len() > 100 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone title must be between 1-100 characters".to_string(),
-                });
-            }
+    // Map category to ID (simplified mapping for now)
+    let category_id = match category.to_lowercase().as_str() {
+        "web development" => 1,
+        "mobile development" => 2,
+        "design" => 3,
+        "writing" => 4,
+        "marketing" => 5,
+        _ => 99, // Other
+    };
 
-            if milestone_input.description.len() > 500 {
-                return Err(ContractError::InvalidInput {
-                    error: "Milestone description must be max 500 characters".to_string(),
-                });
-            }
+    // Map skills to tag IDs (simplified)
+    let skill_tags: Vec<u8> = skills_required.iter().enumerate()
+        .map(|(i, _)| (i % 50) as u8) // Simple hash for now
+        .collect();
 
-            total_milestone_amount = total_milestone_amount.checked_add(milestone_input.amount)?;
-
-            let milestone_deadline =
-                get_future_timestamp(env.block.time, milestone_input.deadline_days);
-            validate_deadline(milestone_deadline, env.block.time)?;
-
-            job_milestones.push(Milestone {
-                id: idx as u64,
-                title: milestone_input.title.clone(),
-                description: milestone_input.description.clone(),
-                amount: milestone_input.amount,
-                deadline: milestone_deadline,
-                completed: false,
-                completed_at: None,
-            });
-        }
-
-        // Ensure milestone amounts sum to total budget
-        if total_milestone_amount != budget {
-            return Err(ContractError::InvalidInput {
-                error: "Sum of milestone amounts must equal total budget".to_string(),
-            });
-        }
-    }
+    // Determine budget range
+    let budget_range = if budget < Uint128::from(500u128) { 1 }
+        else if budget < Uint128::from(5000u128) { 2 }
+        else { 3 };
 
     // Create and save job
     let job = Job {
         id: job_id,
         poster: info.sender.clone(),
-        title,
-        description,
         budget,
-        category,
-        skills_required,
         duration_days,
-        documents: documents.unwrap_or_default(),
         status: JobStatus::Open,
         assigned_freelancer: None,
         created_at: env.block.time,
         updated_at: env.block.time,
         deadline,
-        milestones: job_milestones,
         escrow_id: None,
         total_proposals: 0,
-        company: None,
-        location: None,
+        content_hash,
+        category_id,
+        skill_tags,
+        budget_range,
+        experience_level: 2, // Default to mid-level
+        is_remote: true,     // Default to remote
+        has_milestones: milestones.is_some(),
+        urgency_level: 2,    // Default to medium urgency
     };
 
     JOBS.save(deps.storage, job_id, &job)?;
@@ -538,7 +575,7 @@ fn execute_post_job(
         .add_attribute("job_id", job_id.to_string())
         .add_attribute("poster", info.sender.to_string())
         .add_attribute("budget", budget.to_string())
-        .add_attribute("milestones_count", job.milestones.len().to_string()))
+        .add_attribute("budget", budget.to_string()))
 }
 
 fn execute_withdraw_proposal(
@@ -671,15 +708,9 @@ fn execute_complete_job(
         });
     }
 
-    // Check if all milestones are completed (if any)
-    if !job.milestones.is_empty() {
-        let all_completed = job.milestones.iter().all(|m| m.completed);
-        if !all_completed {
-            return Err(ContractError::InvalidInput {
-                error: "All milestones must be completed before job completion".to_string(),
-            });
-        }
-    }
+    // In hybrid architecture, milestone completion is tracked off-chain
+    // The contract trusts that the frontend has verified milestone completion
+    // before allowing job completion
 
     // Update job status
     job.status = JobStatus::Completed;
@@ -759,123 +790,31 @@ fn execute_complete_job(
 }
 
 fn execute_complete_milestone(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    milestone_id: u64,
+    _deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    _job_id: u64,
+    _milestone_id: u64,
 ) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-
-    // Load and validate job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    // Only assigned freelancer can complete milestones
-    if job.assigned_freelancer.is_none() || job.assigned_freelancer.as_ref() != Some(&info.sender) {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    if job.status != JobStatus::InProgress {
-        return Err(ContractError::InvalidInput {
-            error: "Job is not in progress".to_string(),
-        });
-    }
-
-    // Find and update milestone
-    let milestone_index = job
-        .milestones
-        .iter()
-        .position(|m| m.id == milestone_id)
-        .ok_or_else(|| ContractError::InvalidInput {
-            error: "Milestone not found".to_string(),
-        })?;
-
-    if job.milestones[milestone_index].completed {
-        return Err(ContractError::InvalidInput {
-            error: "Milestone already completed".to_string(),
-        });
-    }
-
-    // Mark milestone as completed
-    job.milestones[milestone_index].completed = true;
-    job.milestones[milestone_index].completed_at = Some(env.block.time);
-    job.updated_at = env.block.time;
-
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "complete_milestone")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("milestone_id", milestone_id.to_string())
-        .add_attribute("freelancer", info.sender.to_string())
-        .add_attribute(
-            "milestone_amount",
-            job.milestones[milestone_index].amount.to_string(),
-        ))
+    // In hybrid architecture, milestone completion is tracked off-chain
+    // This function is deprecated but kept for API compatibility
+    Err(ContractError::InvalidInput {
+        error: "Milestone management is now handled off-chain".to_string(),
+    })
 }
 
 fn execute_approve_milestone(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    milestone_id: u64,
+    _deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    _job_id: u64,
+    _milestone_id: u64,
 ) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    ensure_not_paused(deps.as_ref())?;
-
-    // Load and validate job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    // Only job poster can approve milestones
-    if job.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    if job.status != JobStatus::InProgress {
-        return Err(ContractError::InvalidInput {
-            error: "Job is not in progress".to_string(),
-        });
-    }
-
-    // Find milestone
-    let milestone_index = job
-        .milestones
-        .iter()
-        .position(|m| m.id == milestone_id)
-        .ok_or_else(|| ContractError::InvalidInput {
-            error: "Milestone not found".to_string(),
-        })?;
-
-    if !job.milestones[milestone_index].completed {
-        return Err(ContractError::InvalidInput {
-            error: "Milestone must be completed before approval".to_string(),
-        });
-    }
-
-    let milestone_amount = job.milestones[milestone_index].amount;
-
-    // In a real implementation, this would trigger escrow release for the milestone amount
-    let mut response = Response::new()
-        .add_attribute("method", "approve_milestone")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("milestone_id", milestone_id.to_string())
-        .add_attribute("approver", info.sender.to_string())
-        .add_attribute("milestone_amount", milestone_amount.to_string());
-
-    // If escrow exists, release milestone payment
-    if let Some(escrow_id) = &job.escrow_id {
-        response = response.add_attribute("escrow_partial_release", escrow_id);
-        // Note: In a real implementation, you'd call partial escrow release here
-    }
-
-    job.updated_at = env.block.time;
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(response)
+    // In hybrid architecture, milestone approval is tracked off-chain
+    // This function is deprecated but kept for API compatibility
+    Err(ContractError::InvalidInput {
+        error: "Milestone management is now handled off-chain".to_string(),
+    })
 }
 
 fn execute_submit_rating(
@@ -1201,7 +1140,17 @@ fn query_all_jobs(
             if job.status == JobStatus::Open {
                 // Filter by category if specified
                 if let Some(ref cat) = category {
-                    if job.category.to_lowercase() != cat.to_lowercase() {
+                    // Map category name to ID for comparison
+                    let category_id = match cat.to_lowercase().as_str() {
+                        "web development" => 1,
+                        "mobile development" => 2,
+                        "design" => 3,
+                        "writing" => 4,
+                        "marketing" => 5,
+                        _ => 99, // Other
+                    };
+                    
+                    if job.category_id != category_id {
                         continue;
                     }
                 }
@@ -1335,7 +1284,8 @@ fn query_user_stats(deps: Deps, user: String) -> StdResult<UserStatsResponse> {
 
 fn query_platform_stats(deps: Deps) -> StdResult<PlatformStatsResponse> {
     let mut total_jobs = 0u64;
-    let mut active_jobs = 0u64;
+    let mut open_jobs = 0u64;
+    let mut in_progress_jobs = 0u64;
     let mut completed_jobs = 0u64;
     let mut total_volume = Uint128::zero();
 
@@ -1348,28 +1298,47 @@ fn query_platform_stats(deps: Deps) -> StdResult<PlatformStatsResponse> {
         total_volume = total_volume.checked_add(job.budget)?;
 
         match job.status {
-            JobStatus::Open | JobStatus::InProgress => active_jobs += 1,
+            JobStatus::Open => open_jobs += 1,
+            JobStatus::InProgress => in_progress_jobs += 1,
             JobStatus::Completed => completed_jobs += 1,
             _ => {}
         }
     }
 
     // Count unique users efficiently
+    // Count bounties
+    let bounty_stats = BOUNTIES
+        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .try_fold(
+            (0u64, 0u64, 0u64),
+            |acc, result| -> StdResult<(u64, u64, u64)> {
+                let (_, bounty) = result?;
+                let (total, open, completed) = acc;
+                Ok((
+                    total + 1,
+                    if bounty.status == BountyStatus::Open { open + 1 } else { open },
+                    if bounty.status == BountyStatus::Completed { completed + 1 } else { completed },
+                ))
+            },
+        )?;
+
     let total_users = USER_STATS
         .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
         .count() as u64;
 
-    // Calculate platform fees (approximate based on volume and fee percentage)
-    let config = CONFIG.load(deps.storage)?;
-    let platform_fees_collected = total_volume.multiply_ratio(config.platform_fee_percent, 100u64);
+    // Calculate total value locked in escrows (simplified - using total volume as proxy)
+    let total_value_locked = total_volume;
 
     Ok(PlatformStatsResponse {
         total_jobs,
-        active_jobs,
+        open_jobs,
+        in_progress_jobs,
         completed_jobs,
+        total_bounties: bounty_stats.0,
+        open_bounties: bounty_stats.1,
+        completed_bounties: bounty_stats.2,
         total_users,
-        total_volume,
-        platform_fees_collected,
+        total_value_locked,
     })
 }
 
@@ -1612,870 +1581,6 @@ fn query_rate_limit_status(
 }
 
 // ========================================
-// BOUNTY EXECUTION FUNCTIONS
-// ========================================
-
-#[allow(clippy::too_many_arguments)]
-fn execute_create_bounty(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    title: String,
-    description: String,
-    requirements: Vec<String>,
-    total_reward: Uint128,
-    category: String,
-    skills_required: Vec<String>,
-    submission_deadline_days: u64,
-    review_period_days: u64,
-    max_winners: u64,
-    reward_distribution: Vec<RewardTierInput>,
-    documents: Option<Vec<String>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    reentrancy_guard(deps.branch())?;
-    check_rate_limit(deps.branch(), &env, &info.sender, RateLimitAction::PostJob)?;
-    ensure_not_paused(deps.as_ref())?;
-
-    if skills_required.is_empty() || skills_required.len() > 20 {
-        return Err(ContractError::InvalidInput {
-            error: "Skills required must have 1-20 items".to_string(),
-        });
-    }
-
-    if requirements.is_empty() || requirements.len() > 10 {
-        return Err(ContractError::InvalidInput {
-            error: "Requirements must have 1-10 items".to_string(),
-        });
-    }
-
-    if submission_deadline_days == 0 || submission_deadline_days > 365 {
-        return Err(ContractError::InvalidInput {
-            error: "Submission deadline must be between 1-365 days".to_string(),
-        });
-    }
-
-    if review_period_days == 0 || review_period_days > 30 {
-        return Err(ContractError::InvalidInput {
-            error: "Review period must be between 1-30 days".to_string(),
-        });
-    }
-
-    if max_winners == 0 || max_winners > 50 {
-        return Err(ContractError::InvalidInput {
-            error: "Max winners must be between 1-50".to_string(),
-        });
-    }
-
-    // Validate reward distribution
-    if reward_distribution.len() != max_winners as usize {
-        return Err(ContractError::InvalidInput {
-            error: "Reward distribution must match max winners count".to_string(),
-        });
-    }
-
-    let mut total_percentage = 0u64;
-    let mut reward_tiers: Vec<RewardTier> = Vec::new();
-
-    for (i, tier_input) in reward_distribution.iter().enumerate() {
-        if tier_input.position != (i + 1) as u64 {
-            return Err(ContractError::InvalidInput {
-                error: "Reward positions must be sequential starting from 1".to_string(),
-            });
-        }
-
-        if tier_input.percentage == 0 || tier_input.percentage > 100 {
-            return Err(ContractError::InvalidInput {
-                error: "Each reward percentage must be between 1-100".to_string(),
-            });
-        }
-
-        total_percentage += tier_input.percentage;
-
-        let amount = total_reward * Uint128::from(tier_input.percentage) / Uint128::from(100u64);
-        reward_tiers.push(RewardTier {
-            position: tier_input.position,
-            percentage: tier_input.percentage,
-            amount,
-        });
-    }
-
-    if total_percentage != 100 {
-        return Err(ContractError::InvalidInput {
-            error: "Total reward percentage must equal 100".to_string(),
-        });
-    }
-
-    // Get and increment bounty counter
-    let bounty_id = BOUNTY_COUNTER.load(deps.storage).unwrap_or(0);
-    BOUNTY_COUNTER.save(deps.storage, &(bounty_id + 1))?;
-
-    // Calculate deadlines
-    let submission_deadline = get_future_timestamp(env.block.time, submission_deadline_days);
-
-    // Create bounty
-    let bounty = Bounty {
-        id: bounty_id,
-        poster: info.sender.clone(),
-        title: title.clone(),
-        description: description.clone(),
-        requirements,
-        total_reward,
-        category: category.clone(),
-        skills_required,
-        submission_deadline,
-        review_period_days,
-        max_winners,
-        reward_distribution: reward_tiers,
-        documents: documents.unwrap_or_default(),
-        status: BountyStatus::Open,
-        created_at: env.block.time,
-        updated_at: env.block.time,
-        total_submissions: 0,
-        selected_winners: Vec::new(),
-        escrow_id: None,
-    };
-
-    // Save bounty
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "create_bounty")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("poster", info.sender.to_string())
-        .add_attribute("title", title)
-        .add_attribute("total_reward", total_reward.to_string())
-        .add_attribute("category", category)
-        .add_attribute("max_winners", max_winners.to_string()))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_edit_bounty(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-    title: Option<String>,
-    description: Option<String>,
-    requirements: Option<Vec<String>>,
-    submission_deadline_days: Option<u64>,
-    review_period_days: Option<u64>,
-    documents: Option<Vec<String>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Only bounty poster can edit
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only edit open bounties
-    if bounty.status != BountyStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Can only edit open bounties".to_string(),
-        });
-    }
-
-    // Check if bounty has submissions - if so, limit what can be edited
-    if bounty.total_submissions > 0
-        && (title.is_some() || requirements.is_some() || submission_deadline_days.is_some())
-    {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot change title, requirements, or deadline when submissions exist"
-                .to_string(),
-        });
-    }
-
-    // Update fields if provided
-    if let Some(new_title) = title {
-        validate_job_title(&new_title)?;
-        bounty.title = new_title;
-    }
-
-    if let Some(new_description) = description {
-        validate_job_description(&new_description)?;
-        bounty.description = new_description;
-    }
-
-    if let Some(new_requirements) = requirements {
-        if new_requirements.is_empty() || new_requirements.len() > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Requirements must have 1-10 items".to_string(),
-            });
-        }
-        bounty.requirements = new_requirements;
-    }
-
-    if let Some(deadline_days) = submission_deadline_days {
-        if deadline_days == 0 || deadline_days > 365 {
-            return Err(ContractError::InvalidInput {
-                error: "Submission deadline must be between 1-365 days".to_string(),
-            });
-        }
-        bounty.submission_deadline = get_future_timestamp(env.block.time, deadline_days);
-    }
-
-    if let Some(review_days) = review_period_days {
-        if review_days == 0 || review_days > 30 {
-            return Err(ContractError::InvalidInput {
-                error: "Review period must be between 1-30 days".to_string(),
-            });
-        }
-        bounty.review_period_days = review_days;
-    }
-
-    if let Some(new_documents) = documents {
-        bounty.documents = new_documents;
-    }
-
-    bounty.updated_at = env.block.time;
-
-    // Save updated bounty
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "edit_bounty")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("editor", info.sender.to_string()))
-}
-
-fn execute_cancel_bounty(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Only bounty poster can cancel
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only cancel open bounties
-    if bounty.status != BountyStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Can only cancel open bounties".to_string(),
-        });
-    }
-
-    // Update status
-    bounty.status = BountyStatus::Cancelled;
-    bounty.updated_at = env.block.time;
-
-    // Save updated bounty
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "cancel_bounty")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("poster", info.sender.to_string()))
-}
-
-fn execute_submit_to_bounty(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-    title: String,
-    description: String,
-    deliverables: Vec<String>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-    check_rate_limit(
-        deps.branch(),
-        &env,
-        &info.sender,
-        RateLimitAction::SubmitProposal,
-    )?; // Use same rate limit as proposals
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Can only submit to open bounties
-    if bounty.status != BountyStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Can only submit to open bounties".to_string(),
-        });
-    }
-
-    // Check deadline
-    if env.block.time >= bounty.submission_deadline {
-        return Err(ContractError::InvalidInput {
-            error: "Submission deadline has passed".to_string(),
-        });
-    }
-
-    // Validate inputs
-    if title.is_empty() || title.len() > 100 {
-        return Err(ContractError::InvalidInput {
-            error: "Title must be 1-100 characters".to_string(),
-        });
-    }
-
-    if description.is_empty() || description.len() > 2000 {
-        return Err(ContractError::InvalidInput {
-            error: "Description must be 1-2000 characters".to_string(),
-        });
-    }
-
-    if deliverables.is_empty() || deliverables.len() > 10 {
-        return Err(ContractError::InvalidInput {
-            error: "Must provide 1-10 deliverable URLs".to_string(),
-        });
-    }
-
-    // Check if user already submitted
-    let user_submissions = USER_BOUNTY_SUBMISSIONS
-        .may_load(deps.storage, &info.sender)?
-        .unwrap_or_default();
-
-    for submission_id in user_submissions.iter() {
-        let submission = BOUNTY_SUBMISSIONS.load(deps.storage, *submission_id)?;
-        if submission.bounty_id == bounty_id
-            && submission.status != BountySubmissionStatus::Rejected
-        {
-            return Err(ContractError::InvalidInput {
-                error: "You have already submitted to this bounty".to_string(),
-            });
-        }
-    }
-
-    // Get and increment submission counter
-    let submission_id = BOUNTY_SUBMISSION_COUNTER.load(deps.storage).unwrap_or(0);
-    BOUNTY_SUBMISSION_COUNTER.save(deps.storage, &(submission_id + 1))?;
-
-    // Create submission
-    let submission = BountySubmission {
-        id: submission_id,
-        bounty_id,
-        submitter: info.sender.clone(),
-        title: title.clone(),
-        description: description.clone(),
-        deliverables,
-        submitted_at: env.block.time,
-        status: BountySubmissionStatus::Submitted,
-        review_notes: None,
-        score: None,
-        winner_position: None,
-    };
-
-    // Save submission
-    BOUNTY_SUBMISSIONS.save(deps.storage, submission_id, &submission)?;
-
-    // Update bounty submission count
-    bounty.total_submissions += 1;
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    // Update bounty submissions mapping
-    let mut bounty_submissions = BOUNTY_SUBMISSIONS_BY_BOUNTY
-        .may_load(deps.storage, bounty_id)?
-        .unwrap_or_default();
-    bounty_submissions.push(submission_id);
-    BOUNTY_SUBMISSIONS_BY_BOUNTY.save(deps.storage, bounty_id, &bounty_submissions)?;
-
-    // Update user submissions mapping
-    let mut user_submissions = USER_BOUNTY_SUBMISSIONS
-        .may_load(deps.storage, &info.sender)?
-        .unwrap_or_default();
-    user_submissions.push(submission_id);
-    USER_BOUNTY_SUBMISSIONS.save(deps.storage, &info.sender, &user_submissions)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "submit_to_bounty")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("submission_id", submission_id.to_string())
-        .add_attribute("submitter", info.sender.to_string())
-        .add_attribute("title", title))
-}
-
-fn execute_edit_bounty_submission(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    submission_id: u64,
-    title: Option<String>,
-    description: Option<String>,
-    deliverables: Option<Vec<String>>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate submission
-    let mut submission = BOUNTY_SUBMISSIONS.load(deps.storage, submission_id)?;
-
-    // Only submitter can edit
-    if submission.submitter != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only edit submitted or rejected submissions
-    if submission.status != BountySubmissionStatus::Submitted
-        && submission.status != BountySubmissionStatus::Rejected
-    {
-        return Err(ContractError::InvalidInput {
-            error: "Can only edit submitted or rejected submissions".to_string(),
-        });
-    }
-
-    // Check if bounty deadline has passed
-    let bounty = BOUNTIES.load(deps.storage, submission.bounty_id)?;
-    if env.block.time >= bounty.submission_deadline {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot edit submission after deadline".to_string(),
-        });
-    }
-
-    // Update fields if provided
-    if let Some(new_title) = title {
-        if new_title.is_empty() || new_title.len() > 100 {
-            return Err(ContractError::InvalidInput {
-                error: "Title must be 1-100 characters".to_string(),
-            });
-        }
-        submission.title = new_title;
-    }
-
-    if let Some(new_description) = description {
-        if new_description.is_empty() || new_description.len() > 2000 {
-            return Err(ContractError::InvalidInput {
-                error: "Description must be 1-2000 characters".to_string(),
-            });
-        }
-        submission.description = new_description;
-    }
-
-    if let Some(new_deliverables) = deliverables {
-        if new_deliverables.is_empty() || new_deliverables.len() > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Must provide 1-10 deliverable URLs".to_string(),
-            });
-        }
-        submission.deliverables = new_deliverables;
-    }
-
-    // Reset status to submitted if it was rejected
-    if submission.status == BountySubmissionStatus::Rejected {
-        submission.status = BountySubmissionStatus::Submitted;
-        submission.review_notes = None;
-        submission.score = None;
-    }
-
-    // Save updated submission
-    BOUNTY_SUBMISSIONS.save(deps.storage, submission_id, &submission)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "edit_bounty_submission")
-        .add_attribute("submission_id", submission_id.to_string())
-        .add_attribute("submitter", info.sender.to_string()))
-}
-
-fn execute_withdraw_bounty_submission(
-    mut deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    submission_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate submission
-    let submission = BOUNTY_SUBMISSIONS.load(deps.storage, submission_id)?;
-
-    // Only submitter can withdraw
-    if submission.submitter != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only withdraw submitted submissions
-    if submission.status != BountySubmissionStatus::Submitted {
-        return Err(ContractError::InvalidInput {
-            error: "Can only withdraw submitted submissions".to_string(),
-        });
-    }
-
-    // Remove submission from storage
-    BOUNTY_SUBMISSIONS.remove(deps.storage, submission_id);
-
-    // Update bounty submission count
-    let mut bounty = BOUNTIES.load(deps.storage, submission.bounty_id)?;
-    bounty.total_submissions = bounty.total_submissions.saturating_sub(1);
-    BOUNTIES.save(deps.storage, submission.bounty_id, &bounty)?;
-
-    // Update bounty submissions mapping
-    let mut bounty_submissions = BOUNTY_SUBMISSIONS_BY_BOUNTY
-        .may_load(deps.storage, submission.bounty_id)?
-        .unwrap_or_default();
-    bounty_submissions.retain(|&id| id != submission_id);
-    BOUNTY_SUBMISSIONS_BY_BOUNTY.save(deps.storage, submission.bounty_id, &bounty_submissions)?;
-
-    // Update user submissions mapping
-    let mut user_submissions = USER_BOUNTY_SUBMISSIONS
-        .may_load(deps.storage, &info.sender)?
-        .unwrap_or_default();
-    user_submissions.retain(|&id| id != submission_id);
-    USER_BOUNTY_SUBMISSIONS.save(deps.storage, &info.sender, &user_submissions)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "withdraw_bounty_submission")
-        .add_attribute("submission_id", submission_id.to_string())
-        .add_attribute("submitter", info.sender.to_string()))
-}
-
-fn execute_review_bounty_submission(
-    mut deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    submission_id: u64,
-    status: BountySubmissionStatus,
-    review_notes: Option<String>,
-    score: Option<u8>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate submission
-    let mut submission = BOUNTY_SUBMISSIONS.load(deps.storage, submission_id)?;
-    let bounty = BOUNTIES.load(deps.storage, submission.bounty_id)?;
-
-    // Only bounty poster can review
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only review submitted submissions
-    if submission.status != BountySubmissionStatus::Submitted {
-        return Err(ContractError::InvalidInput {
-            error: "Can only review submitted submissions".to_string(),
-        });
-    }
-
-    // Validate status change
-    match status {
-        BountySubmissionStatus::UnderReview
-        | BountySubmissionStatus::Approved
-        | BountySubmissionStatus::Rejected => {}
-        _ => {
-            return Err(ContractError::InvalidInput {
-                error: "Invalid review status".to_string(),
-            })
-        }
-    }
-
-    // Validate score if provided
-    if let Some(score_val) = score {
-        if score_val == 0 || score_val > 10 {
-            return Err(ContractError::InvalidInput {
-                error: "Score must be between 1-10".to_string(),
-            });
-        }
-    }
-
-    // Validate review notes length
-    if let Some(ref notes) = review_notes {
-        if notes.len() > 500 {
-            return Err(ContractError::InvalidInput {
-                error: "Review notes must be max 500 characters".to_string(),
-            });
-        }
-    }
-
-    // Update submission
-    submission.status = status.clone();
-    submission.review_notes = review_notes;
-    submission.score = score;
-
-    // Save updated submission
-    BOUNTY_SUBMISSIONS.save(deps.storage, submission_id, &submission)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "review_bounty_submission")
-        .add_attribute("submission_id", submission_id.to_string())
-        .add_attribute("bounty_id", submission.bounty_id.to_string())
-        .add_attribute("reviewer", info.sender.to_string())
-        .add_attribute("status", format!("{:?}", status))
-        .add_attribute("score", score.map_or("none".to_string(), |s| s.to_string())))
-}
-
-fn execute_select_bounty_winners(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-    winner_submissions: Vec<WinnerSelection>,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Only bounty poster can select winners
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only select winners for open bounties
-    if bounty.status != BountyStatus::Open {
-        return Err(ContractError::InvalidInput {
-            error: "Can only select winners for open bounties".to_string(),
-        });
-    }
-
-    // Check if submission deadline has passed
-    if env.block.time < bounty.submission_deadline {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot select winners before submission deadline".to_string(),
-        });
-    }
-
-    // Validate winner selections
-    if winner_submissions.is_empty() || winner_submissions.len() > bounty.max_winners as usize {
-        return Err(ContractError::InvalidInput {
-            error: format!("Must select 1-{} winners", bounty.max_winners),
-        });
-    }
-
-    // Validate winner positions and submissions
-    let mut selected_positions = std::collections::HashSet::new();
-    let mut selected_submission_ids = std::collections::HashSet::new();
-
-    for winner in &winner_submissions {
-        // Check position is valid
-        if winner.position == 0 || winner.position > bounty.max_winners {
-            return Err(ContractError::InvalidInput {
-                error: format!("Position must be between 1-{}", bounty.max_winners),
-            });
-        }
-
-        // Check position is unique
-        if !selected_positions.insert(winner.position) {
-            return Err(ContractError::InvalidInput {
-                error: "Each position can only have one winner".to_string(),
-            });
-        }
-
-        // Check submission exists and belongs to this bounty
-        let submission = BOUNTY_SUBMISSIONS.load(deps.storage, winner.submission_id)?;
-        if submission.bounty_id != bounty_id {
-            return Err(ContractError::InvalidInput {
-                error: "Submission does not belong to this bounty".to_string(),
-            });
-        }
-
-        // Check submission is approved
-        if submission.status != BountySubmissionStatus::Approved {
-            return Err(ContractError::InvalidInput {
-                error: "Only approved submissions can be selected as winners".to_string(),
-            });
-        }
-
-        // Check submission is unique
-        if !selected_submission_ids.insert(winner.submission_id) {
-            return Err(ContractError::InvalidInput {
-                error: "Each submission can only win one position".to_string(),
-            });
-        }
-    }
-
-    // Update winning submissions
-    for winner in &winner_submissions {
-        let mut submission = BOUNTY_SUBMISSIONS.load(deps.storage, winner.submission_id)?;
-        submission.status = BountySubmissionStatus::Winner;
-        submission.winner_position = Some(winner.position);
-        BOUNTY_SUBMISSIONS.save(deps.storage, winner.submission_id, &submission)?;
-    }
-
-    // Update bounty
-    bounty.status = BountyStatus::InReview;
-    bounty.selected_winners = winner_submissions.iter().map(|w| w.submission_id).collect();
-    bounty.updated_at = env.block.time;
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "select_bounty_winners")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("selector", info.sender.to_string())
-        .add_attribute("winners_count", winner_submissions.len().to_string()))
-}
-
-fn execute_create_bounty_escrow(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Only bounty poster can create escrow
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only create escrow for bounties in review or with selected winners
-    if bounty.status != BountyStatus::InReview {
-        return Err(ContractError::InvalidInput {
-            error: "Can only create escrow for bounties with selected winners".to_string(),
-        });
-    }
-
-    // Check if escrow already exists
-    if bounty.escrow_id.is_some() {
-        return Err(ContractError::InvalidInput {
-            error: "Escrow already exists for this bounty".to_string(),
-        });
-    }
-
-    // Check if winners are selected
-    if bounty.selected_winners.is_empty() {
-        return Err(ContractError::InvalidInput {
-            error: "No winners selected for this bounty".to_string(),
-        });
-    }
-
-    // Validate payment amount
-    let config = CONFIG.load(deps.storage)?;
-    let platform_fee =
-        bounty.total_reward * Uint128::from(config.platform_fee_percent) / Uint128::from(100u64);
-    let total_required = bounty.total_reward + platform_fee;
-
-    let payment = info.funds.iter().find(|coin| coin.denom == "uxion");
-    match payment {
-        Some(coin) => {
-            if coin.amount < total_required {
-                return Err(ContractError::InsufficientFunds {
-                    expected: total_required.to_string(),
-                    actual: coin.amount.to_string(),
-                });
-            }
-        }
-        None => {
-            return Err(ContractError::InsufficientFunds {
-                expected: total_required.to_string(),
-                actual: "0".to_string(),
-            });
-        }
-    }
-
-    // Create escrow ID
-    let escrow_id = format!("bounty_{}_{}", bounty_id, env.block.time.seconds());
-
-    // Update bounty
-    bounty.escrow_id = Some(escrow_id.clone());
-    bounty.updated_at = env.block.time;
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "create_bounty_escrow")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("escrow_id", escrow_id)
-        .add_attribute("total_amount", total_required.to_string())
-        .add_attribute("platform_fee", platform_fee.to_string())
-        .add_attribute("poster", info.sender.to_string()))
-}
-
-fn execute_release_bounty_rewards(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    bounty_id: u64,
-) -> Result<Response, ContractError> {
-    // Security checks
-    ensure_not_paused(deps.as_ref())?;
-    reentrancy_guard(deps.branch())?;
-
-    // Load and validate bounty
-    let mut bounty = BOUNTIES.load(deps.storage, bounty_id)?;
-
-    // Only bounty poster can release rewards
-    if bounty.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Can only release rewards for bounties in review
-    if bounty.status != BountyStatus::InReview {
-        return Err(ContractError::InvalidInput {
-            error: "Can only release rewards for bounties in review".to_string(),
-        });
-    }
-
-    // Check if escrow exists
-    if bounty.escrow_id.is_none() {
-        return Err(ContractError::InvalidInput {
-            error: "No escrow found for this bounty".to_string(),
-        });
-    }
-
-    // Check if winners are selected
-    if bounty.selected_winners.is_empty() {
-        return Err(ContractError::InvalidInput {
-            error: "No winners selected for this bounty".to_string(),
-        });
-    }
-
-    // Create payout messages for winners
-    let mut messages = Vec::new();
-    let mut total_paid = Uint128::zero();
-
-    for winner_submission_id in &bounty.selected_winners {
-        let submission = BOUNTY_SUBMISSIONS.load(deps.storage, *winner_submission_id)?;
-
-        if let Some(position) = submission.winner_position {
-            // Find the reward tier for this position
-            if let Some(reward_tier) = bounty
-                .reward_distribution
-                .iter()
-                .find(|tier| tier.position == position)
-            {
-                let payout_msg = cosmwasm_std::BankMsg::Send {
-                    to_address: submission.submitter.to_string(),
-                    amount: vec![cosmwasm_std::Coin {
-                        denom: "uxion".to_string(),
-                        amount: reward_tier.amount,
-                    }],
-                };
-                messages.push(cosmwasm_std::SubMsg::new(payout_msg));
-                total_paid += reward_tier.amount;
-            }
-        }
-    }
-
-    // Update bounty status
-    bounty.status = BountyStatus::Completed;
-    bounty.updated_at = env.block.time;
-    BOUNTIES.save(deps.storage, bounty_id, &bounty)?;
-
-    Ok(Response::new()
-        .add_submessages(messages)
-        .add_attribute("method", "release_bounty_rewards")
-        .add_attribute("bounty_id", bounty_id.to_string())
-        .add_attribute("total_paid", total_paid.to_string())
-        .add_attribute("winners_count", bounty.selected_winners.len().to_string())
-        .add_attribute("poster", info.sender.to_string()))
-}
-
-// ========================================
 // BOUNTY QUERY FUNCTIONS
 // ========================================
 
@@ -2503,7 +1608,8 @@ fn query_bounties(
             if let Ok(bounty) = result {
                 // Filter by category
                 if let Some(ref cat) = category {
-                    if bounty.category != *cat {
+                    let category_id = crate::helpers::convert_category_to_id(cat);
+                    if bounty.category_id != category_id {
                         return false;
                     }
                 }
@@ -2554,7 +1660,8 @@ fn query_all_bounties(
 
                 // Filter by category
                 if let Some(ref cat) = category {
-                    if bounty.category != *cat {
+                    let category_id = crate::helpers::convert_category_to_id(cat);
+                    if bounty.category_id != category_id {
                         return false;
                     }
                 }

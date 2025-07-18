@@ -1,6 +1,7 @@
 use crate::state::{
-    AuditLog, Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config, Dispute,
-    EscrowState, Job, JobStatus, Proposal, ProposalMilestone, Rating, SecurityMetrics, UserStats,
+    AuditLog, Bounty, BountyStatus, BountySubmission, BountySubmissionStatus, Config,
+    ContactPreference, Dispute, EscrowState, Job, JobStatus, Proposal, ProposalMilestone, Rating,
+    SecurityMetrics, UserStats,
 };
 use cosmwasm_std::{Timestamp, Uint128};
 use schemars::JsonSchema;
@@ -37,16 +38,27 @@ pub struct WinnerSelection {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum ExecuteMsg {
-    // Job Management
+    // 🎯 JOB MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
     PostJob {
+        // 🌐 OFF-CHAIN CONTENT (will be hashed and stored externally)
         title: String,
         description: String,
-        budget: Uint128,
-        category: String,
-        skills_required: Vec<String>,
-        duration_days: u64,
+        company: Option<String>,
+        location: Option<String>,
+        category: String,             // Will be converted to category_id
+        skills_required: Vec<String>, // Will be converted to skill_tags
         documents: Option<Vec<String>>,
         milestones: Option<Vec<MilestoneInput>>,
+
+        // 🔥 ON-CHAIN ESSENTIAL DATA
+        budget: Uint128,
+        duration_days: u64,
+        experience_level: u8, // 1=Entry, 2=Mid, 3=Senior
+        is_remote: bool,
+        urgency_level: u8, // 1=Low, 2=Medium, 3=High, 4=Urgent
+
+        // 🌐 WEB2 BACKEND REFERENCE
+        off_chain_storage_key: String, // Key for retrieving from web2 backend
     },
     EditJob {
         job_id: u64,
@@ -58,6 +70,7 @@ pub enum ExecuteMsg {
         duration_days: Option<u64>,
         documents: Option<Vec<String>>,
         milestones: Option<Vec<MilestoneInput>>,
+        off_chain_storage_key: String, // Key for web2 backend updates
     },
     DeleteJob {
         job_id: u64,
@@ -66,12 +79,24 @@ pub enum ExecuteMsg {
         job_id: u64,
     },
 
-    // Proposal Management
+    // 🎯 PROPOSAL MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
     SubmitProposal {
         job_id: u64,
+
+        // 🌐 OFF-CHAIN CONTENT (will be hashed and stored externally)
         cover_letter: String,
-        delivery_time_days: u64,
         milestones: Option<Vec<ProposalMilestone>>,
+        portfolio_samples: Option<Vec<String>>, // Links to work samples
+
+        // 🔥 ON-CHAIN ESSENTIAL DATA
+        delivery_time_days: u64,
+        contact_preference: ContactPreference,
+        agreed_to_terms: bool,
+        agreed_to_escrow: bool,
+        estimated_hours: Option<u16>,
+
+        // 🌐 WEB2 BACKEND REFERENCE
+        off_chain_storage_key: String,
     },
     EditProposal {
         proposal_id: u64,
@@ -153,16 +178,22 @@ pub enum ExecuteMsg {
     PauseContract {},
     UnpauseContract {},
 
-    // User Profile Management
+    // User Profile Management (HYBRID)
     UpdateUserProfile {
-        name: Option<String>,
+        // 🌐 OFF-CHAIN CONTENT
+        display_name: Option<String>,
         bio: Option<String>,
         skills: Option<Vec<String>>,
         location: Option<String>,
         website: Option<String>,
-        portfolio_url: Option<String>,
+        portfolio_links: Option<Vec<String>>,
+
+        // 🔥 ON-CHAIN METADATA
         hourly_rate: Option<Uint128>,
         availability: Option<String>,
+
+        // 🌐 WEB2 BACKEND REFERENCE
+        off_chain_storage_key: String,
     },
 
     // Bounty Management
@@ -396,11 +427,14 @@ pub struct UserStatsResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PlatformStatsResponse {
     pub total_jobs: u64,
-    pub active_jobs: u64,
+    pub open_jobs: u64,
+    pub in_progress_jobs: u64,
     pub completed_jobs: u64,
+    pub total_bounties: u64,
+    pub open_bounties: u64,
+    pub completed_bounties: u64,
     pub total_users: u64,
-    pub total_volume: Uint128,
-    pub platform_fees_collected: Uint128,
+    pub total_value_locked: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -461,6 +495,24 @@ pub struct BountySubmissionResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct BountySubmissionsResponse {
     pub submissions: Vec<BountySubmission>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct SearchResponse {
+    pub jobs: Vec<Job>,
+    pub bounties: Vec<Bounty>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct TrendingResponse {
+    pub trending_jobs: Vec<Job>,
+    pub trending_bounties: Vec<Bounty>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct CategoriesResponse {
+    pub job_categories: Vec<(String, u64)>,
+    pub bounty_categories: Vec<(String, u64)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

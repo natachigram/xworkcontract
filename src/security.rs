@@ -260,8 +260,12 @@ pub fn check_rate_limit(
         | RateLimitAction::EditBounty 
         | RateLimitAction::CancelBounty 
         | RateLimitAction::SubmitToBounty 
+        | RateLimitAction::EditBountySubmission
+        | RateLimitAction::WithdrawBountySubmission
         | RateLimitAction::ReviewBountySubmission 
         | RateLimitAction::SelectBountyWinners 
+        | RateLimitAction::CreateBountyEscrow
+        | RateLimitAction::ReleaseBountyRewards
         | RateLimitAction::ReleaseEscrow 
         | RateLimitAction::RefundEscrow 
         | RateLimitAction::UpdateProfile 
@@ -294,8 +298,12 @@ pub enum RateLimitAction {
     EditBounty,
     CancelBounty,
     SubmitToBounty,
+    EditBountySubmission,
+    WithdrawBountySubmission,
     ReviewBountySubmission,
     SelectBountyWinners,
+    CreateBountyEscrow,
+    ReleaseBountyRewards,
     CreateEscrow,
     ReleaseEscrow,
     RefundEscrow,

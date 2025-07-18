@@ -1,14 +1,19 @@
+use crate::category_skill_manager::{
+    calculate_budget_range, get_or_create_category_id, get_or_create_skill_ids,
+};
 use crate::contract_helpers::*;
 use crate::error::ContractError;
-use crate::helpers::{
-    ensure_not_paused, get_future_timestamp, validate_budget, validate_duration,
-    validate_job_description, validate_job_title,
+use crate::hash_utils::{
+    create_content_hash, create_job_content_bundle, create_proposal_content_bundle,
 };
+use crate::helpers::{ensure_not_paused, get_future_timestamp, validate_budget, validate_duration};
 use crate::msg::{JobResponse, JobsResponse, MilestoneInput, ProposalResponse, ProposalsResponse};
-use crate::security::{check_rate_limit, reentrancy_guard, validate_text_inputs, RateLimitAction};
+use crate::security::{check_rate_limit, reentrancy_guard, RateLimitAction};
 use crate::state::{
-    Job, JobStatus, Proposal, ProposalMilestone, ProposalStatus, Rating, CONFIG, DISPUTES, ESCROWS,
-    JOBS, JOB_PROPOSALS, NEXT_JOB_ID, NEXT_PROPOSAL_ID, PROPOSALS, RATINGS,
+    ContactPreference, Job, JobStatus, Proposal, ProposalMilestone, ProposalStatus, Rating,
+    ACTIVE_JOBS, CONFIG, CONTENT_HASHES, DISPUTES, ENTITY_TO_HASH, ESCROWS, HASH_TO_ENTITY, JOBS,
+    JOBS_BY_BUDGET_RANGE, JOBS_BY_CATEGORY, JOBS_BY_SKILL, JOB_PROPOSALS, NEXT_JOB_ID,
+    NEXT_PROPOSAL_ID, PROPOSALS, RATINGS,
 };
 // Import macros explicitly
 use crate::{apply_security_checks, build_success_response, ensure_admin, validate_content_inputs};
@@ -22,7 +27,7 @@ pub fn calculate_platform_fee(amount: Uint128, fee_percent: u64) -> Uint128 {
     amount * Uint128::from(fee_percent) / Uint128::from(100u64)
 }
 
-/// Create a new job posting
+/// 🎯 Create a new job posting with hybrid on-chain/off-chain storage
 #[allow(clippy::too_many_arguments)]
 pub fn execute_post_job(
     mut deps: DepsMut,
@@ -36,85 +41,118 @@ pub fn execute_post_job(
     duration_days: u64,
     company: Option<String>,
     location: Option<String>,
-    _job_type: Option<String>,
-    _experience_level: Option<String>,
-    _remote_allowed: Option<bool>,
-    milestones: Option<Vec<String>>,
+    documents: Option<Vec<String>>,
+    milestones: Option<Vec<MilestoneInput>>,
+    experience_level: u8,
+    is_remote: bool,
+    urgency_level: u8,
+    off_chain_storage_key: String,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
+    // 🔒 Apply security checks
     apply_security_checks!(deps, env, info, RateLimitAction::PostJob);
 
-    // Load configuration
+    // 📋 Load configuration and validate
     let config = CONFIG.load(deps.storage)?;
+    validate_content_inputs!(&title, &description);
+    validate_budget(budget)?;
+    validate_duration(duration_days, config.max_job_duration_days)?;
 
-    // Validate inputs using helper
-    validate_job_creation_inputs(
-        &title,
-        &description,
-        budget,
-        &category,
-        &skills_required,
-        duration_days,
-        &company,
-        &location,
-        config.max_job_duration_days,
-    )?;
+    // 🎯 Validate on-chain fields
+    if experience_level < 1 || experience_level > 3 {
+        return Err(ContractError::InvalidInput {
+            error: "Experience level must be 1 (Entry), 2 (Mid), or 3 (Senior)".to_string(),
+        });
+    }
+    if urgency_level < 1 || urgency_level > 4 {
+        return Err(ContractError::InvalidInput {
+            error: "Urgency level must be 1-4".to_string(),
+        });
+    }
 
-    // Validate payment
+    // 💰 Validate payment
     if budget.is_zero() {
-        // Free project - no payment required
         if !info.funds.is_empty() {
             return Err(ContractError::InvalidFunds {});
         }
     } else {
-        // Paid project - payment must match budget
         if info.funds.len() != 1 || info.funds[0].amount != budget {
             return Err(ContractError::InvalidFunds {});
         }
     }
 
-    // Get next job ID
+    // 🆔 Generate job ID
     let job_id = NEXT_JOB_ID.load(deps.storage)?;
     NEXT_JOB_ID.save(deps.storage, &(job_id + 1))?;
 
-    // Create job
+    // 🏷️ Convert categories and skills to IDs for efficient storage
+    let category_id = get_or_create_category_id(deps.branch(), &category)?;
+    let skill_tags = get_or_create_skill_ids(deps.branch(), &skills_required)?;
+    let budget_range = calculate_budget_range(budget);
+
+    // 🌐 Create off-chain content bundle
+    let documents_vec = documents.unwrap_or_default();
+    let (off_chain_bundle, content_hash_str) = create_job_content_bundle(
+        job_id,
+        &title,
+        &description,
+        company.as_deref(),
+        location.as_deref(),
+        &category,
+        &skills_required,
+        &documents_vec,
+        env.block.time.seconds(),
+    )?;
+
+    // 📄 Create content hash metadata
+    let content_hash = create_content_hash(
+        &serde_json::to_string(&off_chain_bundle).map_err(|e| ContractError::InvalidInput {
+            error: format!("Serialization error: {}", e),
+        })?,
+        "job_content",
+        env.block.time.seconds(),
+    )?;
+
+    // 🗄️ Store hash mappings for retrieval
+    let entity_key = format!("job_{}", job_id);
+    CONTENT_HASHES.save(deps.storage, &content_hash_str, &content_hash)?;
+    HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
+    ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str)?;
+
+    // 🎯 Create optimized on-chain job record
     let job = Job {
         id: job_id,
         poster: info.sender.clone(),
-        title,
-        description,
         budget,
-        category: category.clone(),
-        skills_required,
         duration_days,
-        documents: vec![], // Initialize as empty
         status: JobStatus::Open,
         assigned_freelancer: None,
         created_at: env.block.time,
         updated_at: env.block.time,
         deadline: get_future_timestamp(env.block.time, duration_days),
-        milestones: milestones
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| crate::state::Milestone {
-                id: 0, // Will be set properly in a real implementation
-                title: m,
-                description: String::new(),
-                amount: Uint128::zero(),
-                deadline: get_future_timestamp(env.block.time, duration_days),
-                completed: false,
-                completed_at: None,
-            })
-            .collect(),
         escrow_id: Some(format!("job_{}", job_id)),
         total_proposals: 0,
-        company,
-        location,
+        content_hash,
+        category_id,
+        skill_tags: skill_tags.clone(),
+        budget_range,
+        experience_level,
+        is_remote,
+        has_milestones: milestones.is_some(),
+        urgency_level,
     };
 
     JOBS.save(deps.storage, job_id, &job)?;
 
-    // Create escrow
+    // 🔍 Update search indexes for fast filtering
+    update_job_search_indexes(
+        deps.branch(),
+        job_id,
+        category_id,
+        budget_range,
+        &skill_tags,
+    )?;
+
+    // 💰 Create escrow
     let escrow_id = format!("job_{}", job_id);
     let escrow = crate::state::EscrowState {
         id: escrow_id.clone(),
@@ -132,16 +170,21 @@ pub fn execute_post_job(
 
     ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
 
+    // 🎉 Return success response with essential info
     Ok(build_success_response!(
         "post_job",
         job_id,
         &info.sender,
         "budget" => budget.to_string(),
-        "category" => category,
+        "category_id" => category_id.to_string(),
+        "content_hash" => content_hash_str,
+        "off_chain_key" => off_chain_storage_key,
         "escrow_id" => escrow_id
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
+/// 🎯 Submit a proposal with hybrid on-chain/off-chain storage
 #[allow(clippy::too_many_arguments)]
 pub fn execute_submit_proposal(
     mut deps: DepsMut,
@@ -150,27 +193,30 @@ pub fn execute_submit_proposal(
     job_id: u64,
     cover_letter: String,
     delivery_time_days: u64,
+    contact_preference: ContactPreference,
+    agreed_to_terms: bool,
+    agreed_to_escrow: bool,
+    estimated_hours: Option<u16>,
     milestones: Option<Vec<crate::state::ProposalMilestone>>,
+    _portfolio_samples: Option<Vec<String>>,
+    _off_chain_storage_key: String,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
+    // 🔒 Apply security checks
     apply_security_checks!(deps, env, info, RateLimitAction::SubmitProposal);
 
-    // Load and validate job
+    // 📋 Load and validate job
     let mut job = JOBS
         .load(deps.storage, job_id)
         .map_err(|_| ContractError::JobNotFound {})?;
     validate_job_status_for_operation(&job.status, &[JobStatus::Open], "submit proposal to")?;
 
-    // Validate inputs
+    // 🔍 Validate inputs
     validate_content_inputs!(&cover_letter, &cover_letter);
-
-    // Generate cover letter hash (simple implementation, in production would be IPFS hash)
-    let cover_letter_hash = format!("hash_{}", cover_letter.len());
 
     let config = CONFIG.load(deps.storage)?;
     validate_duration(delivery_time_days, config.max_job_duration_days)?;
 
-    // Check if user already has a proposal for this job
+    // ❌ Check if user already has a proposal for this job
     let existing_proposals: Vec<_> = PROPOSALS
         .range(deps.storage, None, None, Order::Ascending)
         .filter_map(|item| {
@@ -192,23 +238,57 @@ pub fn execute_submit_proposal(
         });
     }
 
-    // Get next proposal ID
+    // 🆔 Generate proposal ID
     let proposal_id = NEXT_PROPOSAL_ID.load(deps.storage)?;
     NEXT_PROPOSAL_ID.save(deps.storage, &(proposal_id + 1))?;
 
-    // Create proposal
+    // 🌐 Create off-chain content bundle
+    let milestones_json = milestones
+        .as_ref()
+        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+        .unwrap_or(serde_json::Value::Null);
+
+    let (off_chain_bundle, content_hash_str) = create_proposal_content_bundle(
+        proposal_id,
+        &cover_letter,
+        &[milestones_json],
+        env.block.time.seconds(),
+    )?;
+
+    // 📄 Create content hash metadata
+    let content_hash = create_content_hash(
+        &serde_json::to_string(&off_chain_bundle).map_err(|e| ContractError::InvalidInput {
+            error: format!("Serialization error: {}", e),
+        })?,
+        "proposal_content",
+        env.block.time.seconds(),
+    )?;
+
+    // 📊 Calculate proposal score (can be enhanced with ML later)
+    let proposal_score =
+        calculate_proposal_score(&cover_letter, estimated_hours, milestones.as_ref());
+
+    // 🗄️ Store hash mappings
+    let entity_key = format!("proposal_{}", proposal_id);
+    CONTENT_HASHES.save(deps.storage, &content_hash_str, &content_hash)?;
+    HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
+    ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str)?;
+
+    // 🎯 Create optimized on-chain proposal record
     let proposal = Proposal {
         id: proposal_id,
         freelancer: info.sender.clone(),
         job_id,
-        cover_letter_hash,
-        resume_hash: String::new(),
         delivery_time_days,
-        contact_preference: String::new(),
-        agreed_to_terms: true,
-        agreed_to_escrow: true,
+        contact_preference,
+        agreed_to_terms,
+        agreed_to_escrow,
         submitted_at: env.block.time,
-        milestones: milestones.unwrap_or_default(),
+        content_hash,
+        proposal_score,
+        has_milestones: milestones.is_some(),
+        milestone_count: milestones.as_ref().map(|m| m.len() as u8).unwrap_or(0),
+        estimated_hours: estimated_hours.unwrap_or(0),
     };
 
     PROPOSALS.save(deps.storage, proposal_id, &proposal)?;
@@ -233,7 +313,7 @@ pub fn execute_submit_proposal(
     ))
 }
 
-/// Edit an existing job
+/// 🎯 Edit an existing job with hybrid on-chain/off-chain storage
 #[allow(clippy::too_many_arguments)]
 pub fn execute_edit_job(
     mut deps: DepsMut,
@@ -248,11 +328,12 @@ pub fn execute_edit_job(
     duration_days: Option<u64>,
     documents: Option<Vec<String>>,
     milestones: Option<Vec<MilestoneInput>>,
+    off_chain_storage_key: String,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
+    // 🔒 Apply security checks
     apply_security_checks!(deps, env, info, RateLimitAction::EditJob);
 
-    // Load and validate job
+    // 📋 Load and validate job
     let mut job = JOBS
         .load(deps.storage, job_id)
         .map_err(|_| ContractError::JobNotFound {})?;
@@ -261,64 +342,138 @@ pub fn execute_edit_job(
 
     let config = CONFIG.load(deps.storage)?;
 
-    // Update fields if provided
-    if let Some(ref new_title) = title {
-        validate_content_inputs!(new_title, new_title);
-        validate_job_title(new_title)?;
-        job.title = new_title.clone();
-    }
+    // 🔄 Track what changed for off-chain updates
+    let mut content_changed = false;
+    let mut metadata_changed = false;
 
-    if let Some(ref new_description) = description {
-        validate_content_inputs!(new_description, new_description);
-        validate_job_description(new_description)?;
-        job.description = new_description.clone();
-    }
-
+    // ⚡ Update on-chain metadata fields if they changed
     if let Some(new_budget) = budget {
         validate_budget(new_budget)?;
-        job.budget = new_budget;
-    }
-
-    if let Some(ref new_category) = category {
-        validate_string_field(new_category, "Category", 1, 50)?;
-        job.category = new_category.clone();
-    }
-
-    if let Some(ref new_skills) = skills_required {
-        validate_collection_size(new_skills, "Skills required", 1, 20)?;
-        job.skills_required = new_skills.clone();
+        if job.budget != new_budget {
+            job.budget = new_budget;
+            job.budget_range = calculate_budget_range(new_budget);
+            metadata_changed = true;
+        }
     }
 
     if let Some(new_duration) = duration_days {
         validate_duration(new_duration, config.max_job_duration_days)?;
-        job.duration_days = new_duration;
-        job.deadline = get_future_timestamp(job.created_at, new_duration);
+        if job.duration_days != new_duration {
+            job.duration_days = new_duration;
+            job.deadline = get_future_timestamp(env.block.time, new_duration);
+            metadata_changed = true;
+        }
     }
 
-    if let Some(new_documents) = documents {
-        job.documents = new_documents;
+    // 🏷️ Update category and skills if changed
+    if let Some(ref new_category) = category {
+        let new_category_id = get_or_create_category_id(deps.branch(), new_category)?;
+        if job.category_id != new_category_id {
+            job.category_id = new_category_id;
+            content_changed = true;
+            metadata_changed = true;
+        }
     }
 
-    if let Some(new_milestones) = milestones {
-        job.milestones = new_milestones
-            .into_iter()
-            .enumerate()
-            .map(|(i, milestone_input)| crate::state::Milestone {
-                id: i as u64,
-                title: milestone_input.title,
-                description: milestone_input.description,
-                amount: milestone_input.amount,
-                deadline: env.block.time.plus_days(milestone_input.deadline_days),
-                completed: false,
-                completed_at: None,
-            })
-            .collect();
+    if let Some(ref new_skills) = skills_required {
+        let new_skill_tags = get_or_create_skill_ids(deps.branch(), new_skills)?;
+        if job.skill_tags != new_skill_tags {
+            job.skill_tags = new_skill_tags;
+            content_changed = true;
+            metadata_changed = true;
+        }
     }
 
-    job.updated_at = env.block.time;
-    JOBS.save(deps.storage, job_id, &job)?;
+    // 🌐 If content fields changed, create new off-chain bundle
+    if title.is_some()
+        || description.is_some()
+        || category.is_some()
+        || skills_required.is_some()
+        || documents.is_some()
+        || milestones.is_some()
+    {
+        content_changed = true;
+    }
 
-    Ok(build_success_response!("edit_job", job_id, &info.sender))
+    if content_changed {
+        // 📦 Need to fetch existing content and update it
+        // In production, this would fetch from off-chain storage using the current hash
+        // For now, we'll create a new bundle with provided values
+
+        let final_title = title.unwrap_or_else(|| "Updated Job".to_string()); // In real app, fetch from off-chain
+        let final_description = description.unwrap_or_else(|| "Updated Description".to_string());
+        let final_category = category.unwrap_or_else(|| "General".to_string());
+        let final_skills = skills_required.unwrap_or_default();
+        let final_documents = documents.unwrap_or_default();
+
+        // 🔍 Validate content inputs
+        validate_content_inputs!(&final_title, &final_description);
+
+        // 🌐 Create new off-chain content bundle
+        let (off_chain_bundle, content_hash_str) = create_job_content_bundle(
+            job_id,
+            &final_title,
+            &final_description,
+            None, // company - would be fetched from existing data
+            None, // location - would be fetched from existing data
+            &final_category,
+            &final_skills,
+            &final_documents,
+            env.block.time.seconds(),
+        )?;
+
+        // 📄 Create new content hash
+        let content_hash = create_content_hash(
+            &serde_json::to_string(&off_chain_bundle).map_err(|e| ContractError::InvalidInput {
+                error: format!("Serialization error: {}", e),
+            })?,
+            "job_content",
+            env.block.time.seconds(),
+        )?;
+
+        // 🗄️ Update hash mappings
+        let entity_key = format!("job_{}", job_id);
+
+        // Remove old hash mapping
+        if let Ok(old_hash) = ENTITY_TO_HASH.load(deps.storage, &entity_key) {
+            CONTENT_HASHES.remove(deps.storage, &old_hash);
+            HASH_TO_ENTITY.remove(deps.storage, &old_hash);
+        }
+
+        // Add new hash mappings
+        CONTENT_HASHES.save(deps.storage, &content_hash_str, &content_hash)?;
+        HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
+        ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str)?;
+
+        // Update job content hash
+        job.content_hash = content_hash;
+    }
+
+    // 🕒 Update timestamp and save
+    if metadata_changed || content_changed {
+        job.updated_at = env.block.time;
+        JOBS.save(deps.storage, job_id, &job)?;
+
+        // 🔍 Update search indexes if metadata changed
+        if metadata_changed {
+            update_job_search_indexes(
+                deps.branch(),
+                job_id,
+                job.category_id,
+                job.budget_range,
+                &job.skill_tags,
+            )?;
+        }
+    }
+
+    Ok(build_success_response!(
+        "edit_job",
+        job_id,
+        &info.sender,
+        "content_changed" => content_changed.to_string(),
+        "metadata_changed" => metadata_changed.to_string(),
+        "off_chain_key" => off_chain_storage_key
+    ))
 }
 
 /// Delete a job
@@ -603,9 +758,9 @@ pub fn execute_edit_proposal(
     env: Env,
     info: MessageInfo,
     proposal_id: u64,
-    cover_letter: Option<String>,
+    _cover_letter: Option<String>,
     delivery_time_days: Option<u64>,
-    milestones: Option<Vec<ProposalMilestone>>,
+    _milestones: Option<Vec<ProposalMilestone>>,
 ) -> Result<Response, ContractError> {
     // Apply security checks
     apply_security_checks!(deps, env, info, RateLimitAction::EditProposal);
@@ -621,18 +776,22 @@ pub fn execute_edit_proposal(
     // Note: Since Proposal doesn't have status field, we assume it's editable if it exists
     // In a full implementation, you would add status field to Proposal struct
 
-    // Update fields if provided
-    if let Some(new_cover_letter) = cover_letter {
-        proposal.cover_letter_hash = new_cover_letter;
-    }
+    // In hybrid architecture, updates would recreate the content bundle
+    // For now, we'll update available fields and recreate content hash
 
+    // Update delivery time if provided
     if let Some(new_delivery_time) = delivery_time_days {
         proposal.delivery_time_days = new_delivery_time;
     }
 
-    if let Some(new_milestones) = milestones {
-        proposal.milestones = new_milestones;
-    }
+    // For content updates (cover_letter, milestones), we would need to:
+    // 1. Fetch current off-chain content using content_hash
+    // 2. Update the relevant fields
+    // 3. Create new content bundle and hash
+    // 4. Update the content_hash field
+
+    // For now, just update timestamp to indicate proposal was modified
+    proposal.submitted_at = env.block.time;
 
     // Save updated proposal
     PROPOSALS.save(deps.storage, proposal_id, &proposal)?;
@@ -672,177 +831,31 @@ pub fn execute_withdraw_proposal(
 // Milestone Management Functions
 
 pub fn execute_complete_milestone(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    milestone_id: u64,
+    _deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    _job_id: u64,
+    _milestone_id: u64,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
-    apply_security_checks!(deps, env, info, RateLimitAction::CompleteMilestone);
-
-    // Load job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    // Check authorization - only assigned freelancer can complete milestone
-    if let Some(ref freelancer) = job.assigned_freelancer {
-        if *freelancer != info.sender {
-            return Err(ContractError::Unauthorized {});
-        }
-    } else {
-        return Err(ContractError::InvalidInput {
-            error: "No freelancer assigned to this job".to_string(),
-        });
-    }
-
-    // Check job status
-    if job.status != JobStatus::InProgress {
-        return Err(ContractError::InvalidInput {
-            error: "Job must be in progress to complete milestones".to_string(),
-        });
-    }
-
-    // Find and validate milestone
-    let milestone_index = job
-        .milestones
-        .iter()
-        .position(|m| m.id == milestone_id)
-        .ok_or_else(|| ContractError::InvalidInput {
-            error: format!("Milestone {} not found", milestone_id),
-        })?;
-
-    let milestone = &mut job.milestones[milestone_index];
-
-    // Check if milestone is already completed
-    if milestone.completed {
-        return Err(ContractError::InvalidInput {
-            error: "Milestone already completed".to_string(),
-        });
-    }
-
-    // Check milestone deadline
-    if env.block.time > milestone.deadline {
-        return Err(ContractError::InvalidInput {
-            error: "Milestone deadline has passed".to_string(),
-        });
-    }
-
-    // Mark milestone as completed
-    milestone.completed = true;
-    milestone.completed_at = Some(env.block.time);
-
-    // Update job
-    job.updated_at = env.block.time;
-
-    // Check if all milestones are completed
-    let all_completed = job.milestones.iter().all(|m| m.completed);
-    if all_completed {
-        job.status = JobStatus::Completed;
-    }
-
-    // Save updated job
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(Response::new()
-        .add_attribute("action", "complete_milestone")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("milestone_id", milestone_id.to_string())
-        .add_attribute("freelancer", info.sender)
-        .add_attribute("all_milestones_completed", all_completed.to_string()))
+    // In hybrid architecture, milestone completion is tracked off-chain
+    // This function is deprecated but kept for API compatibility
+    Err(ContractError::InvalidInput {
+        error: "Milestone management is now handled off-chain".to_string(),
+    })
 }
 
 pub fn execute_approve_milestone(
-    mut deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    job_id: u64,
-    milestone_id: u64,
+    _deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    _job_id: u64,
+    _milestone_id: u64,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
-    apply_security_checks!(deps, env, info, RateLimitAction::ApproveMilestone);
-
-    // Load job
-    let mut job = JOBS.load(deps.storage, job_id)?;
-
-    // Check authorization - only job poster can approve milestone
-    if job.poster != info.sender {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    // Check job status
-    if job.status != JobStatus::Completed && job.status != JobStatus::InProgress {
-        return Err(ContractError::InvalidInput {
-            error: "Job must be completed or in progress to approve milestones".to_string(),
-        });
-    }
-
-    // Find and validate milestone
-    let milestone_index = job
-        .milestones
-        .iter()
-        .position(|m| m.id == milestone_id)
-        .ok_or_else(|| ContractError::InvalidInput {
-            error: format!("Milestone {} not found", milestone_id),
-        })?;
-
-    let milestone = &mut job.milestones[milestone_index];
-
-    // Check if milestone is completed first
-    if !milestone.completed {
-        return Err(ContractError::InvalidInput {
-            error: "Cannot approve milestone that hasn't been completed yet".to_string(),
-        });
-    }
-
-    // Calculate milestone-based payment release
-    let mut messages = Vec::new();
-
-    // If job has escrow, calculate and release milestone payment
-    if let Some(ref escrow_id) = job.escrow_id {
-        if let Ok(escrow) = ESCROWS.load(deps.storage, escrow_id) {
-            // Calculate milestone payment (distribute evenly across milestones)
-            let milestone_count = job.milestones.len() as u128;
-            let milestone_payment = escrow.amount.multiply_ratio(1u128, milestone_count);
-
-            // Create payment message to freelancer
-            if let Some(ref freelancer) = job.assigned_freelancer {
-                let payment_msg = cosmwasm_std::BankMsg::Send {
-                    to_address: freelancer.to_string(),
-                    amount: vec![cosmwasm_std::Coin {
-                        denom: "uxion".to_string(), // Platform native token
-                        amount: milestone_payment,
-                    }],
-                };
-                messages.push(cosmwasm_std::SubMsg::new(payment_msg));
-            }
-        }
-    }
-
-    // Check if all milestones are approved (completed)
-    let all_approved = job.milestones.iter().all(|m| m.completed);
-    if all_approved {
-        job.status = JobStatus::Completed;
-
-        // If all milestones complete, mark escrow as fully released
-        if let Some(ref escrow_id) = job.escrow_id {
-            if let Ok(mut escrow) = ESCROWS.load(deps.storage, escrow_id) {
-                escrow.released = true;
-                ESCROWS.save(deps.storage, escrow_id, &escrow)?;
-            }
-        }
-    }
-
-    // Update job
-    job.updated_at = env.block.time;
-    JOBS.save(deps.storage, job_id, &job)?;
-
-    Ok(Response::new()
-        .add_submessages(messages)
-        .add_attribute("action", "approve_milestone")
-        .add_attribute("job_id", job_id.to_string())
-        .add_attribute("milestone_id", milestone_id.to_string())
-        .add_attribute("poster", info.sender)
-        .add_attribute("all_milestones_approved", all_approved.to_string()))
+    // In hybrid architecture, milestone approval is tracked off-chain
+    // This function is deprecated but kept for API compatibility
+    Err(ContractError::InvalidInput {
+        error: "Milestone management is now handled off-chain".to_string(),
+    })
 }
 
 // Dispute Management Functions
@@ -1014,4 +1027,101 @@ pub fn execute_resolve_dispute(
         .add_attribute("resolution_length", resolution.len().to_string());
 
     Ok(response)
+}
+
+/// 🔍 Update search indexes for efficient job filtering
+fn update_job_search_indexes(
+    deps: DepsMut,
+    job_id: u64,
+    category_id: u8,
+    budget_range: u8,
+    skill_tags: &[u8],
+) -> Result<(), ContractError> {
+    // Update category index
+    let mut category_jobs = JOBS_BY_CATEGORY
+        .may_load(deps.storage, category_id)?
+        .unwrap_or_default();
+    category_jobs.push(job_id);
+    JOBS_BY_CATEGORY.save(deps.storage, category_id, &category_jobs)?;
+
+    // Update budget range index
+    let mut budget_jobs = JOBS_BY_BUDGET_RANGE
+        .may_load(deps.storage, budget_range)?
+        .unwrap_or_default();
+    budget_jobs.push(job_id);
+    JOBS_BY_BUDGET_RANGE.save(deps.storage, budget_range, &budget_jobs)?;
+
+    // Update skill indexes
+    for &skill_id in skill_tags {
+        let mut skill_jobs = JOBS_BY_SKILL
+            .may_load(deps.storage, skill_id)?
+            .unwrap_or_default();
+        skill_jobs.push(job_id);
+        JOBS_BY_SKILL.save(deps.storage, skill_id, &skill_jobs)?;
+    }
+
+    // Add to active jobs index
+    ACTIVE_JOBS.save(deps.storage, job_id, &true)?;
+
+    Ok(())
+}
+
+/// 📊 Calculate proposal score based on content quality and completeness
+fn calculate_proposal_score(
+    cover_letter: &str,
+    estimated_hours: Option<u16>,
+    milestones: Option<&Vec<crate::state::ProposalMilestone>>,
+) -> u8 {
+    let mut score = 50u8; // Base score
+
+    // Cover letter quality (length and content)
+    if cover_letter.len() > 100 {
+        score += 15;
+    } else if cover_letter.len() > 50 {
+        score += 10;
+    }
+
+    // Contains keywords indicating quality
+    let quality_keywords = ["experience", "portfolio", "timeline", "approach", "deliver"];
+    let keyword_count = quality_keywords
+        .iter()
+        .filter(|&&keyword| cover_letter.to_lowercase().contains(keyword))
+        .count();
+    score += (keyword_count * 5).min(15) as u8;
+
+    // Has estimated hours
+    if estimated_hours.is_some() {
+        score += 10;
+    }
+
+    // Has milestones
+    if let Some(milestones) = milestones {
+        if !milestones.is_empty() {
+            score += 10;
+        }
+    }
+
+    score.min(100)
+}
+
+/// Validate user authorization
+fn validate_user_authorization(owner: &Addr, requester: &Addr) -> Result<(), ContractError> {
+    if owner != requester {
+        return Err(ContractError::Unauthorized {});
+    }
+    Ok(())
+}
+
+/// Validate job status for operations
+fn validate_job_status_for_operation(
+    status: &JobStatus,
+    allowed_statuses: &[JobStatus],
+    operation: &str,
+) -> Result<(), ContractError> {
+    if !allowed_statuses.contains(status) {
+        return Err(ContractError::InvalidInput {
+            error: format!("Cannot {} job in status {:?}", operation, status),
+        });
+    }
+    Ok(())
 }

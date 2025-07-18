@@ -1,74 +1,121 @@
 use crate::contract_helpers::*;
 use crate::error::ContractError;
-use crate::helpers::{ensure_not_paused};
-use crate::msg::{UserStatsResponse, RatingsResponse, UserProfileResponse};
-use crate::security::{RateLimitAction, check_rate_limit, reentrancy_guard};
+use crate::hash_utils::{create_content_hash, create_user_profile_bundle};
+use crate::helpers::ensure_not_paused;
+use crate::msg::{RatingsResponse, UserProfileResponse, UserStatsResponse};
+use crate::security::{check_rate_limit, reentrancy_guard, RateLimitAction};
 use crate::state::{
-    UserProfile, UserStats, Rating, USER_PROFILES, USER_STATS, RATINGS, JOBS,
+    Rating, UserProfile, UserStats, CONTENT_HASHES, ENTITY_TO_HASH, HASH_TO_ENTITY, JOBS, RATINGS,
+    USER_PROFILES, USER_STATS,
 };
-use crate::{apply_security_checks, build_success_response};
+use crate::{apply_security_checks, build_success_response, validate_content_inputs};
 use cosmwasm_std::{
-    DepsMut, Env, MessageInfo, Response, StdResult, 
-    Uint128, Order, Deps, Addr, Decimal,
+    Addr, Decimal, Deps, DepsMut, Env, MessageInfo, Order, Response, StdResult, Uint128,
 };
 
-/// Update user profile
+/// 🎯 Update user profile with hybrid on-chain/off-chain storage
 #[allow(clippy::too_many_arguments)]
 pub fn execute_update_user_profile(
     mut deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    name: Option<String>,
+    display_name: Option<String>,
     bio: Option<String>,
     skills: Option<Vec<String>>,
     _location: Option<String>,
     _website: Option<String>,
-    portfolio_url: Option<String>,
+    portfolio_links: Option<Vec<String>>,
     _hourly_rate: Option<Uint128>,
     _availability: Option<String>,
+    off_chain_storage_key: String,
 ) -> Result<Response, ContractError> {
-    // Apply security checks
+    // 🔒 Apply security checks
     apply_security_checks!(deps, env, info, RateLimitAction::UpdateProfile);
 
-    // Load or create user profile
+    // 📋 Load or create user profile
     let mut profile = USER_PROFILES
         .may_load(deps.storage, &info.sender)?
         .unwrap_or_else(|| UserProfile {
-            display_name: None,
-            bio: None,
-            skills: vec![],
-            portfolio_links: vec![],
-            created_at: Some(env.block.time),
-            updated_at: Some(env.block.time),
+            created_at: env.block.time,
+            updated_at: env.block.time,
+            content_hash: create_content_hash("", "user_profile", env.block.time.seconds())
+                .unwrap(),
+            total_jobs_completed: 0,
+            average_rating: Decimal::zero(),
+            total_earned: Uint128::zero(),
+            is_verified: false,
+            response_time_hours: 24,
         });
 
-    // Update fields if provided
-    if let Some(new_display_name) = name {
-        validate_string_field(&new_display_name, "Display name", 1, 100)?;
-        profile.display_name = Some(new_display_name);
+    // 🔍 Validate inputs if provided
+    if let Some(ref name) = display_name {
+        validate_content_inputs!(name, name);
+        if name.len() > 100 {
+            return Err(ContractError::InvalidInput {
+                error: "Display name too long".to_string(),
+            });
+        }
     }
 
-    if let Some(new_bio) = bio {
-        validate_string_field(&new_bio, "Bio", 1, 1000)?;
-        profile.bio = Some(new_bio);
+    if let Some(ref bio_text) = bio {
+        validate_content_inputs!(bio_text, bio_text);
+        if bio_text.len() > 1000 {
+            return Err(ContractError::InvalidInput {
+                error: "Bio too long".to_string(),
+            });
+        }
     }
 
-    if let Some(new_skills) = skills {
-        validate_collection_size(&new_skills, "Skills", 0, 50)?;
-        profile.skills = new_skills;
+    // 🌐 Create off-chain content bundle with user profile data
+    let final_skills = skills.unwrap_or_default();
+    let final_portfolio = portfolio_links.unwrap_or_default();
+
+    let (off_chain_bundle, content_hash_str) = create_user_profile_bundle(
+        &info.sender.to_string(),
+        display_name.as_deref(),
+        bio.as_deref(),
+        &final_skills,
+        &final_portfolio,
+        env.block.time.seconds(),
+    )?;
+
+    // 📄 Create content hash metadata
+    let content_hash = create_content_hash(
+        &serde_json::to_string(&off_chain_bundle).map_err(|e| ContractError::InvalidInput {
+            error: format!("Serialization error: {}", e),
+        })?,
+        "user_profile",
+        env.block.time.seconds(),
+    )?;
+
+    // 🗄️ Update hash mappings
+    let entity_key = format!("user_{}", info.sender);
+
+    // Remove old hash mapping if exists
+    if let Ok(old_hash) = ENTITY_TO_HASH.load(deps.storage, &entity_key) {
+        CONTENT_HASHES.remove(deps.storage, &old_hash);
+        HASH_TO_ENTITY.remove(deps.storage, &old_hash);
     }
 
-    // Update portfolio links if provided  
-    if let Some(new_portfolio_url) = portfolio_url {
-        profile.portfolio_links = vec![new_portfolio_url];
-    }
+    // Add new hash mappings
+    CONTENT_HASHES.save(deps.storage, &content_hash_str, &content_hash)?;
+    HASH_TO_ENTITY.save(deps.storage, &content_hash_str, &entity_key)?;
+    ENTITY_TO_HASH.save(deps.storage, &entity_key, &content_hash_str.to_string())?;
 
-    profile.updated_at = Some(env.block.time);
+    // 🎯 Update on-chain profile with essential data only
+    profile.content_hash = content_hash;
+    profile.updated_at = env.block.time;
+
     USER_PROFILES.save(deps.storage, &info.sender, &profile)?;
 
-    Ok(build_success_response!("update_user_profile", 0u64, &info.sender))
+    Ok(build_success_response!(
+        "update_user_profile",
+        0u64,
+        &info.sender,
+        "content_hash" => content_hash_str,
+        "off_chain_key" => off_chain_storage_key
+    ))
 }
-
 /// Submit a rating for a user
 pub fn execute_submit_rating(
     mut deps: DepsMut,
@@ -88,16 +135,16 @@ pub fn execute_submit_rating(
     let job = JOBS.load(deps.storage, job_id)?;
 
     // Validate that the rater is involved in the job
-    let can_rate = job.poster == info.sender || 
-                   job.assigned_freelancer.as_ref() == Some(&info.sender);
+    let can_rate =
+        job.poster == info.sender || job.assigned_freelancer.as_ref() == Some(&info.sender);
 
     if !can_rate {
         return Err(ContractError::Unauthorized {});
     }
 
     // Validate that the rated user is involved in the job
-    let can_be_rated = job.poster == rated_user_addr || 
-                       job.assigned_freelancer.as_ref() == Some(&rated_user_addr);
+    let can_be_rated =
+        job.poster == rated_user_addr || job.assigned_freelancer.as_ref() == Some(&rated_user_addr);
 
     if !can_be_rated {
         return Err(ContractError::InvalidInput {
@@ -163,7 +210,8 @@ pub fn execute_submit_rating(
     let new_total_ratings = stats.total_ratings + 1;
     let current_sum = stats.average_rating * Decimal::from_atomics(stats.total_ratings, 0).unwrap();
     let new_rating_decimal = Decimal::from_atomics(rating, 0).unwrap();
-    let new_average = (current_sum + new_rating_decimal) / Decimal::from_atomics(new_total_ratings, 0).unwrap();
+    let new_average =
+        (current_sum + new_rating_decimal) / Decimal::from_atomics(new_total_ratings, 0).unwrap();
 
     stats.average_rating = new_average;
     stats.total_ratings = new_total_ratings;
@@ -184,8 +232,8 @@ pub fn execute_submit_rating(
 pub fn query_user_profile(deps: Deps, user: String) -> StdResult<UserProfileResponse> {
     let user_addr = deps.api.addr_validate(&user)?;
     let profile = USER_PROFILES.may_load(deps.storage, &user_addr)?;
-    Ok(UserProfileResponse { 
-        profile: profile.unwrap_or_default() 
+    Ok(UserProfileResponse {
+        profile: profile.unwrap_or_default(),
     })
 }
 
@@ -193,15 +241,15 @@ pub fn query_user_profile(deps: Deps, user: String) -> StdResult<UserProfileResp
 pub fn query_user_stats(deps: Deps, user: String) -> StdResult<UserStatsResponse> {
     let user_addr = deps.api.addr_validate(&user)?;
     let stats = USER_STATS.may_load(deps.storage, &user_addr)?;
-    Ok(UserStatsResponse { 
-        stats: stats.unwrap_or_default() 
+    Ok(UserStatsResponse {
+        stats: stats.unwrap_or_default(),
     })
 }
 
 /// Query user ratings
 pub fn query_user_ratings(deps: Deps, user: String) -> StdResult<RatingsResponse> {
     let user_addr = deps.api.addr_validate(&user)?;
-    
+
     let ratings: Vec<_> = RATINGS
         .range(deps.storage, None, None, Order::Descending)
         .filter_map(|item| {
@@ -295,7 +343,7 @@ pub fn update_user_bounty_stats(
     }
 
     if bounty_won {
-        // Could increment total_jobs_completed as a generic "items completed" counter  
+        // Could increment total_jobs_completed as a generic "items completed" counter
         stats.total_jobs_completed += 1;
     }
 

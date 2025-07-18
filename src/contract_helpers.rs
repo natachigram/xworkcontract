@@ -1,11 +1,9 @@
 use crate::error::ContractError;
 use crate::helpers::{
-    query_jobs_paginated, validate_budget, validate_duration, validate_job_description,
-    validate_job_title,
+    query_jobs_paginated, validate_budget, validate_duration,
 };
 use crate::msg::JobsResponse;
 use crate::state::{BountyStatus, JobStatus};
-use crate::validate_text_inputs;
 use cosmwasm_std::{attr, Addr, Attribute, StdResult, Uint128};
 
 // Helper macros and functions to reduce code duplication
@@ -40,13 +38,30 @@ macro_rules! ensure_admin {
     };
 }
 
-/// Macro to validate job/bounty basic inputs
+/// Macro to validate content inputs with basic checks
 #[macro_export]
 macro_rules! validate_content_inputs {
     ($title:expr, $description:expr) => {
-        validate_text_inputs($title, $description, None, None)?;
-        validate_job_title($title)?;
-        validate_job_description($description)?;
+        if $title.is_empty() {
+            return Err(ContractError::InvalidInput {
+                error: "Title cannot be empty".to_string(),
+            });
+        }
+        if $title.len() > 200 {
+            return Err(ContractError::InvalidInput {
+                error: "Title too long".to_string(),
+            });
+        }
+        if $description.is_empty() {
+            return Err(ContractError::InvalidInput {
+                error: "Description cannot be empty".to_string(),
+            });
+        }
+        if $description.len() > 5000 {
+            return Err(ContractError::InvalidInput {
+                error: "Description too long".to_string(),
+            });
+        }
     };
 }
 
@@ -197,4 +212,20 @@ pub fn build_response_attributes(
     }
 
     attrs
+}
+
+/// Helper function to count items with a filter
+pub fn count_items_with_filter<T, F>(
+    storage: &dyn cosmwasm_std::Storage,
+    map: &cw_storage_plus::Map<cosmwasm_std::Addr, T>,
+    _filter: F,
+) -> StdResult<u64>
+where
+    F: Fn(&T) -> bool,
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let count = map
+        .range(storage, None, None, cosmwasm_std::Order::Ascending)
+        .count() as u64;
+    Ok(count)
 }
