@@ -38,9 +38,9 @@ pub struct WinnerSelection {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum ExecuteMsg {
-    // 🎯 JOB MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
+    // JOB MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
     PostJob {
-        // 🌐 OFF-CHAIN CONTENT (will be hashed and stored externally)
+        // OFF-CHAIN CONTENT (will be hashed and stored externally)
         title: String,
         description: String,
         company: Option<String>,
@@ -50,14 +50,14 @@ pub enum ExecuteMsg {
         documents: Option<Vec<String>>,
         milestones: Option<Vec<MilestoneInput>>,
 
-        // 🔥 ON-CHAIN ESSENTIAL DATA
+        // ON-CHAIN ESSENTIAL DATA
         budget: Uint128,
         duration_days: u64,
         experience_level: u8, // 1=Entry, 2=Mid, 3=Senior
         is_remote: bool,
         urgency_level: u8, // 1=Low, 2=Medium, 3=High, 4=Urgent
 
-        // 🌐 WEB2 BACKEND REFERENCE
+        // WEB2 BACKEND REFERENCE
         off_chain_storage_key: String, // Key for retrieving from web2 backend
     },
     EditJob {
@@ -79,7 +79,7 @@ pub enum ExecuteMsg {
         job_id: u64,
     },
 
-    // 🎯 PROPOSAL MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
+    // PROPOSAL MANAGEMENT (HYBRID ON-CHAIN/OFF-CHAIN)
     SubmitProposal {
         job_id: u64,
 
