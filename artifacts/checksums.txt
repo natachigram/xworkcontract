@@ -1,1 +1,1 @@
-fa0205f60bdb75a81f107f7879950b5f72c4db814402bbe821faf46db58a168c  xworks_freelance_contract.wasm
+ca0c8c7398842e86935312958b5b6a64fc8768153cee1b9f6444158c4aefccea  xworks_freelance_contract.wasm

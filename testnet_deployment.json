@@ -1,7 +1,18 @@
 {
-    "network": "xion-testnet-2",
-    "contract_address": "xion12jsycykvhfj33yw8vrsdllxhv63pdmx80q4cxhf3zxvu452qafwq5f40f4",
-    "code_id": 1387,
-    "admin": "xion1nvx9jzdgddnk4vajjhruz3ta20l656459auntt",
-    "rpc_endpoint": "https://rpc.xion-testnet-2.burnt.com:443"
+  "network": "xion-testnet-2",
+  "contract_address": "xion189x0afmv7qkh52uutl08zqr2kxdygpys5zh3fx4ts5xc0f3grlaqar2u8a",
+  "code_id": 1394,
+  "admin": "xion1nvx9jzdgddnk4vajjhruz3ta20l656459auntt",
+  "rpc_endpoint": "https://rpc.xion-testnet-2.burnt.com:443",
+  "deployment_txhash": "751AFA29453181492A493CA17817C27E1D05BA99E42576D9AF0B905EAFE53060",
+  "store_txhash": "CE7A6F2B6CFFE10213BDB14C4AC8F9056CF698F6460CFA6117B81B2594645B49",
+  "deployed_at": "2025-07-21T12:04:08Z",
+  "configuration": {
+    "platform_fee_percentage": 500,
+    "platform_fee_actual": "5%",
+    "min_deposit_amount": "1",
+    "max_description_length": 5000,
+    "max_title_length": 200,
+    "dispute_resolution_timeout": 604800
+  }
 }

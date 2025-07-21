@@ -735,7 +735,8 @@
         "UnderReview",
         "Approved",
         "Rejected",
-        "Winner"
+        "Winner",
+        "Withdrawn"
       ]
     },
     "JobStatus": {
